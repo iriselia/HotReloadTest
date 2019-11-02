@@ -312,6 +312,11 @@ namespace header_tool
 				EToken preproc_directive = push_symbol(next_token(TokenizeMode::PreprocKeyword, data));
 				switch (preproc_directive)
 				{
+				case EToken::PREPROC_LINE:
+				case EToken::PREPROC_PRAGMA:
+				{
+					assert(false);
+				} break;
 				case EToken::PREPROC_IF:
 				case EToken::PREPROC_IFDEF:
 				case EToken::PREPROC_IFNDEF:
