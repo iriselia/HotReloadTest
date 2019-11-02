@@ -1,4 +1,14 @@
-  # define define \# 
+/*
+ *
+ *
+ * /
+ */
+'x'
+'\''
+'\n'
+'\u02c0'
+
+  # define define \
   define
 
 # define name(x, static_cast) int i = 0; \

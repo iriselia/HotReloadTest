@@ -359,6 +359,15 @@ namespace header_tool
 					assert(token == EToken::QUOTE || token == EToken::RANGLE);
 					break;
 				} break;
+				case EToken::PREPROC_ERROR:
+				{
+					push_symbol(token);
+					while (*data && *data != '\n')
+					{
+						++data;
+					}
+					push_symbol(EToken::STRING_LITERAL);
+				} break;
 				default:
 				{
 
@@ -377,8 +386,21 @@ namespace header_tool
 			} break;
 			case EToken::QUOTE:
 			{
-				data = skipQuote(data);
+				while (*data && (*data != '\"'))
+				{
+					if (*data == '\\')
+					{
+						++data;
+						if (!*data) break;
+					}
+					++data;
+				}
+
+				if (*data)  //Skip last quote
+					++data;
+
 				token = EToken::STRING_LITERAL;
+				/*
 				// concatenate multi-line strings for easier
 				// STRING_LITERAL handling in moc
 				if (!preprocess
@@ -394,19 +416,34 @@ namespace header_tool
 					symbols.back() = Symbol(symbols.back().line_num, EToken::STRING_LITERAL, newString);
 					continue;
 				}
+				*/
 			} break;
 			case EToken::SINGLEQUOTE:
 			{
-				while (*data && (*data != '\''
-					|| (*(data - 1) == '\\'
-						&& *(data - 2) != '\\')))
-					++data;
-				if (*data)
-					++data;
-				token = EToken::CHARACTER_LITERAL;
+				// escape sequence (e.g., '\t')
+				// universal character (e.g., '\u02C0').
+				if (*data == '\\')
+				{
+					data++;
+					// do-while loop to process '\'' easily
+					do
+					{
+						data++;
+					}
+					while (*data && *data != '\'');
+					data++;
+				}
+				// plain character (e.g., 'x')
+				else
+				{
+					data += 2;
+				}
+				push_symbol(EToken::CHARACTER_LITERAL);
+				continue;
 			} break;
 			case EToken::LANGLE_SCOPE:
 			{
+				assert(false);
 				// split <:: into two tokens, < and ::
 				token = EToken::LANGLE;
 				data -= 2;
@@ -451,26 +488,15 @@ namespace header_tool
 				assert(false);
 				break;
 			case EToken::C_COMMENT:
-				if (*data)
-				{
-					if (*data == '\n')
-						++line_num;
-					++data;
-					if (*data)
-					{
-						if (*data == '\n')
-							++line_num;
-						++data;
-					}
-				}
+			{
 				while (*data && (*(data - 1) != '/' || *(data - 2) != '*'))
 				{
-					if (*data == '\n')
-						++line_num;
+					//if (*data == '\n')
+					//	++line_num;
 					++data;
 				}
-				token = EToken::WHITESPACE; // one comment, one whitespace
-				[[fallthrough]];
+				push_symbol(EToken::C_COMMENT);
+			} break;
 			case EToken::WHITESPACE:
 				column--;
 				push_symbol(token);
@@ -487,9 +513,8 @@ namespace header_tool
 				{
 					++data;
 				}
-				push_symbol(EToken::STRING_LITERAL);
-
-				continue; // ignore safely, the newline is a separator
+				push_symbol(EToken::CPP_COMMENT);
+				continue;
 			} break;
 			case EToken::NEWLINE:
 			{
@@ -501,15 +526,15 @@ namespace header_tool
 			} break;
 			case EToken::BACKSLASH:
 			{
-				const char* rewind = data;
-				skip_whitespace();
 				if (*data && *data == '\n')
 				{
 					push_symbol(token);
 					continue;
 				}
-				data = rewind;
-				assert(false);
+				else
+				{
+					assert(false);
+				}
 			} break;
 			/*
 			case EToken::LANGLE:
@@ -522,7 +547,7 @@ namespace header_tool
 			*/
 			default:
 			{
-				symbols.emplace_back(line_num, token, input, lexem - begin, data - lexem);
+				push_symbol(token);
 			} break;
 			}
 		}
