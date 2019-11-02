@@ -1,0 +1,69 @@
+#ifndef PREPROCESSOR_H
+#define PREPROCESSOR_H
+
+#include "parser.h"
+#include <list>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <stdio.h>
+
+namespace header_tool
+{
+
+	struct Macro
+	{
+		Macro(bool isFunction = false, bool isVariadic = false) : isFunction( isFunction ), isVariadic( isVariadic )
+		{}
+		bool isFunction;
+		bool isVariadic;
+		std::vector<Symbol> arguments;
+		std::vector<Symbol> symbols;
+	};
+
+#ifdef USE_LEXEM_STORE
+	typedef std::string std::string;
+#else
+	//typedef std::string std::string;
+	//typedef SubArray std::string;
+#endif
+//typedef std::unordered_map<std::string, Macro> std::unordered_map<std::string, Macro>;
+
+	class QFile;
+
+	class Preprocessor : public Parser
+	{
+	public:
+		Preprocessor()
+		{}
+
+		bool preprocessOnly;
+		std::vector<std::string> frameworks;
+		std::set<std::string> preprocessedIncludes;
+		std::unordered_map<std::string, std::string> nonlocalIncludePathResolutionCache;
+		//std::unordered_map<std::string, std::string> nonlocalIncludePathResolutionCache;
+		std::unordered_map<std::string, Macro> macros;
+		std::string resolveInclude(const std::string &filename, const std::string &relativeTo);
+		std::vector<Symbol> preprocess(const std::string &filename, FILE*& device, std::vector<Symbol>& symbols, bool preprocess);
+
+		void parseDefineArguments(Macro *m);
+
+		void skipUntilEndif();
+		bool skipBranch();
+
+		void substituteUntilNewline(std::vector<Symbol> &substituted);
+		static std::vector<Symbol> macroExpandIdentifier(Preprocessor *that, SymbolStack &symbols, uint64 symbol_index, uint64 lineNum, std::string *macroName);
+		static void macroExpand(std::vector<Symbol> *into, Preprocessor *that, const std::vector<Symbol> &toExpand, uint64& index, uint64 lineNum, bool one,
+			const std::set<std::string> &excludeSymbols = std::set<std::string>());
+
+		int evaluateCondition();
+
+	private:
+		void until(Token);
+
+		void preprocess_internal(const std::string &filename, std::vector<Symbol>& symbols, std::vector<Symbol> &preprocessed, bool preprocess);
+	};
+
+}
+
+#endif // PREPROCESSOR_H

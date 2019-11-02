@@ -1,0 +1,1073 @@
+#include "tokenize.h"
+#include "preprocessor.h"
+#include "utils.h"
+
+#define Q_FALLTHROUGH()
+
+#if 0
+#include <std::vector<std::string>.h>
+#include <qfile.h>
+#include <qdir.h>
+#include <qfileinfo.h>
+#endif
+
+namespace header_tool
+{
+	// transform \r\n into \n
+	// \r into \n (os9 style)
+	// backslash-newlines into newlines
+	static std::string clean_newlines(const std::string &input)
+	{
+		std::string result;
+		result.resize(input.size());
+		const char* data = input.data();
+		const char* end = input.data() + input.size();
+		char* output = const_cast<char*>(result.data());
+
+		int newlines = 0;
+		while (data != end)
+		{
+			// Skip spaces and tabs
+			while (data != end && (*data == ' ' || *data == '\t'))
+				data++;
+
+			while (data != end)
+			{
+				if (*data++ == '#')
+				{
+					*output++ = '#';
+				}
+
+				// handle \\\n, \\\r, and \\\r\n
+				bool backslash = false;
+				if (*data == '\\')
+				{
+					data++;
+					backslash = true;
+				}
+
+				switch (*data)
+				{
+					case '\r':
+					{
+						data++;
+						if (backslash)
+						{
+							newlines++;
+						}
+						else
+						{
+							while (newlines)
+							{
+								*output++ = '\n';
+								--newlines;
+							}
+						}
+
+						if (*(data + 1) == '\n')
+						{
+							data++;
+						}
+						break;
+					}
+
+					case '\n':
+					{
+						if (backslash)
+						{
+							newlines++;
+						}
+						else
+						{
+							while (newlines)
+							{
+								*output++ = '\n';
+								--newlines;
+							}
+						}
+						data++;
+						break;
+					}
+
+					default:
+					{
+						if (backslash)
+						{
+							data--;
+						}
+						break;
+					}
+				}
+
+				if (data == end)
+					break;
+
+				*output++ = *data++;
+			}
+		}
+		result.resize(output - result.data());
+		return result;
+	}
+
+	void Preprocessor::skipUntilEndif()
+	{
+		while (index < symbols.size() - 1 && symbols.at(index).token != PP_ENDIF)
+		{
+			switch (symbols.at(index).token)
+			{
+				case PP_IF:
+				case PP_IFDEF:
+				case PP_IFNDEF:
+					++index;
+					skipUntilEndif();
+					break;
+				default:
+					;
+			}
+			++index;
+		}
+	}
+
+	bool Preprocessor::skipBranch()
+	{
+		while (index < symbols.size() - 1
+			&& (symbols.at(index).token != PP_ENDIF
+				&& symbols.at(index).token != PP_ELIF
+				&& symbols.at(index).token != PP_ELSE)
+			)
+		{
+			switch (symbols.at(index).token)
+			{
+				case PP_IF:
+				case PP_IFDEF:
+				case PP_IFNDEF:
+					++index;
+					skipUntilEndif();
+					break;
+				default:
+					;
+			}
+			++index;
+		}
+		return (index < symbols.size() - 1);
+	}
+
+	void Preprocessor::macroExpand(std::vector<Symbol> *into, Preprocessor *that, const std::vector<Symbol> &toExpand, uint64& index,
+		uint64 lineNum, bool one, const std::set<std::string> &excludeSymbols /*= std::set<std::string>()*/)
+	{
+		SymbolStack symbols;
+		SafeSymbols sf;
+		sf.symbols = toExpand;
+		sf.index = index;
+		sf.excludedSymbols = excludeSymbols;
+		symbols.push_back(sf);
+
+		if (toExpand.empty())
+			return;
+
+		for (;;)
+		{
+			std::string macro;
+			std::vector<Symbol> newSyms = macroExpandIdentifier(that, symbols, index, lineNum, &macro);
+
+			if (macro.empty())
+			{
+				// not a macro
+				Symbol s = symbols.back().symbols[index];
+				s.lineNum = lineNum;
+				(*into).push_back(s);
+			}
+			else
+			{
+				SafeSymbols sf;
+				sf.symbols = newSyms;
+				sf.index = 0;
+				sf.expandedMacro = macro;
+				symbols.push_back(sf);
+			}
+			if (!symbols.has_next() || (one && symbols.size() == 1))
+				break;
+			symbols.next();
+		}
+
+		if (symbols.size())
+		{
+			++symbols.back().index;
+			index = symbols.back().index;
+		}
+		else
+		{
+			index = toExpand.size();
+		}
+	}
+
+	std::vector<Symbol> Preprocessor::macroExpandIdentifier(Preprocessor *that, SymbolStack &symbols, uint64 symbol_index, uint64 lineNum, std::string *macroName)
+	{
+		Symbol s = symbols.back().symbols[symbol_index];
+
+		auto& macro_itr = that->macros.find(s.lex);
+
+		// not a macro
+		if (s.token != PP_IDENTIFIER || macro_itr == that->macros.end() || symbols.dontReplaceSymbol(s.lexem()))
+		{
+			return std::vector<Symbol>();
+		}
+
+		const Macro &macro = (*macro_itr).second;
+		*macroName = s.lexem();
+
+		std::vector<Symbol> expansion;
+		if (!macro.isFunction)
+		{
+			expansion = macro.symbols;
+		}
+		else
+		{
+			bool haveSpace = false;
+			while (symbols.test(PP_WHITESPACE))
+			{
+				haveSpace = true;
+			}
+			if (!symbols.test(PP_LPAREN))
+			{
+				*macroName = std::string();
+				std::vector<Symbol> syms;
+				if (haveSpace)
+					syms.push_back(Symbol(lineNum, PP_WHITESPACE));
+				syms.push_back(s);
+				syms.back().lineNum = lineNum;
+				return syms;
+			}
+			std::vector<std::vector<Symbol>> arguments;
+			arguments.reserve(5);
+			while (symbols.has_next())
+			{
+				std::vector<Symbol> argument;
+				// strip leading space
+				while (symbols.test(PP_WHITESPACE))
+				{
+				}
+				int nesting = 0;
+				bool vararg = macro.isVariadic && (arguments.size() == macro.arguments.size() - 1);
+				while (symbols.has_next())
+				{
+					Token t = symbols.next();
+					if (t == PP_LPAREN)
+					{
+						++nesting;
+					}
+					else if (t == PP_RPAREN)
+					{
+						--nesting;
+						if (nesting < 0)
+							break;
+					}
+					else if (t == PP_COMMA && nesting == 0)
+					{
+						if (!vararg)
+							break;
+					}
+					argument.push_back(symbols.symbol());
+				}
+				arguments.push_back(argument);
+
+				if (nesting < 0)
+					break;
+				else if (!symbols.has_next())
+					that->error("missing ')' in macro usage");
+			}
+
+			// empty VA_ARGS
+			if (macro.isVariadic && arguments.size() == macro.arguments.size() - 1)
+			{
+				// todo:
+				// arguments += std::vector<Symbol>();
+			}
+
+			// now replace the macro arguments with the expanded arguments
+			enum Mode
+			{
+				Normal,
+				Hash,
+				HashHash
+			} mode = Normal;
+
+			for (int i = 0; i < macro.symbols.size(); ++i)
+			{
+				const Symbol &s = macro.symbols[i];
+				if (s.token == HASH || s.token == PP_HASHHASH)
+				{
+					mode = (s.token == HASH ? Hash : HashHash);
+					continue;
+				}
+				uint64 index = std::distance(macro.arguments.begin(), std::find(macro.arguments.begin(), macro.arguments.end(), s));
+				if (mode == Normal)
+				{
+					if (index >= 0 && index < arguments.size())
+					{
+						// each argument undoergoes macro expansion if it's not used as part of a # or ##
+						if (i == macro.symbols.size() - 1 || macro.symbols.at(i + 1).token != PP_HASHHASH)
+						{
+							std::vector<Symbol> arg = arguments.at(index);
+							uint64 idx = 1;
+							macroExpand(&expansion, that, arg, idx, lineNum, false, symbols.excludeSymbols());
+						}
+						else
+						{
+							expansion.insert(expansion.end(), arguments[index].begin(), arguments[index].end());
+						}
+					}
+					else
+					{
+						expansion.push_back(s);
+					}
+				}
+				else if (mode == Hash)
+				{
+					if (index < 0)
+					{
+						that->error("'#' is not followed by a macro parameter");
+						continue;
+					}
+					else if (index >= arguments.size())
+					{
+						that->error("Macro invoked with too few parameters for a use of '#'");
+						continue;
+					}
+
+					const std::vector<Symbol> &arg = arguments.at(index);
+					std::string stringified;
+					for (int i = 0; i < arg.size(); ++i)
+					{
+						stringified += arg.at(i).lexem();
+					}
+					replace_all(stringified, R"(")", R"(\")");
+					stringified.insert(0, 1, '"');
+					stringified.insert(stringified.end(), 1, '"');
+					expansion.push_back(Symbol(lineNum, STRING_LITERAL, stringified));
+				}
+				else if (mode == HashHash)
+				{
+					if (s.token == WHITESPACE)
+						continue;
+
+					while (expansion.size() && expansion.back().token == PP_WHITESPACE)
+						expansion.pop_back();
+
+					Symbol next = s;
+					if (index >= 0 && index < arguments.size())
+					{
+						const std::vector<Symbol> &arg = arguments.at(index);
+						if (arg.size() == 0)
+						{
+							mode = Normal;
+							continue;
+						}
+						next = arg.at(0);
+					}
+
+					if (!expansion.empty() && expansion.back().token == s.token
+						&& expansion.back().token != STRING_LITERAL)
+					{
+						Symbol last = expansion.back();
+						expansion.pop_back();
+
+						std::string lexem = last.lexem() + next.lexem();
+						expansion.push_back(Symbol(lineNum, last.token, lexem));
+					}
+					else
+					{
+						expansion.push_back(next);
+					}
+
+					if (index >= 0 && index < arguments.size())
+					{
+						const std::vector<Symbol> &arg = arguments.at(index);
+						for (int i = 1; i < arg.size(); ++i)
+							expansion.push_back(arg[i]);
+					}
+				}
+				mode = Normal;
+			}
+			if (mode != Normal)
+				that->error("'#' or '##' found at the end of a macro argument");
+
+		}
+
+		return expansion;
+	}
+
+	void Preprocessor::substituteUntilNewline(std::vector<Symbol> &substituted)
+	{
+		while (hasNext())
+		{
+			Token token = next();
+			if (token == PP_IDENTIFIER)
+			{
+				macroExpand(&substituted, this, symbols, index, symbol().lineNum, true);
+			}
+			else if (token == PP_DEFINED)
+			{
+				bool braces = test(PP_LPAREN);
+				next(PP_IDENTIFIER);
+				Symbol definedOrNotDefined = symbol();
+				definedOrNotDefined.token = macros.find(definedOrNotDefined.lex) != macros.end() ? PP_MOC_TRUE : PP_MOC_FALSE;
+				substituted.push_back(definedOrNotDefined);
+				if (braces)
+					test(PP_RPAREN);
+				continue;
+			}
+			else if (token == PP_NEWLINE)
+			{
+				substituted.emplace_back();
+				break;
+			}
+			else
+			{
+				substituted.emplace_back();
+			}
+		}
+	}
+
+	class PP_Expression : public Parser
+	{
+	public:
+		int value()
+		{
+			index = 0; return unary_expression_lookup() ? conditional_expression() : 0;
+		}
+
+		int conditional_expression();
+		int logical_OR_expression();
+		int logical_AND_expression();
+		int inclusive_OR_expression();
+		int exclusive_OR_expression();
+		int AND_expression();
+		int equality_expression();
+		int relational_expression();
+		int shift_expression();
+		int additive_expression();
+		int multiplicative_expression();
+		int unary_expression();
+		bool unary_expression_lookup();
+		int primary_expression();
+		bool primary_expression_lookup();
+	};
+
+	int PP_Expression::conditional_expression()
+	{
+		int value = logical_OR_expression();
+		if (test(PP_QUESTION))
+		{
+			int alt1 = conditional_expression();
+			int alt2 = test(PP_COLON) ? conditional_expression() : 0;
+			return value ? alt1 : alt2;
+		}
+		return value;
+	}
+
+	int PP_Expression::logical_OR_expression()
+	{
+		int value = logical_AND_expression();
+		if (test(PP_OROR))
+			return logical_OR_expression() || value;
+		return value;
+	}
+
+	int PP_Expression::logical_AND_expression()
+	{
+		int value = inclusive_OR_expression();
+		if (test(PP_ANDAND))
+			return logical_AND_expression() && value;
+		return value;
+	}
+
+	int PP_Expression::inclusive_OR_expression()
+	{
+		int value = exclusive_OR_expression();
+		if (test(PP_OR))
+			return value | inclusive_OR_expression();
+		return value;
+	}
+
+	int PP_Expression::exclusive_OR_expression()
+	{
+		int value = AND_expression();
+		if (test(PP_HAT))
+			return value ^ exclusive_OR_expression();
+		return value;
+	}
+
+	int PP_Expression::AND_expression()
+	{
+		int value = equality_expression();
+		if (test(PP_AND))
+			return value & AND_expression();
+		return value;
+	}
+
+	int PP_Expression::equality_expression()
+	{
+		int value = relational_expression();
+		switch (next())
+		{
+			case PP_EQEQ:
+				return value == equality_expression();
+			case PP_NE:
+				return value != equality_expression();
+			default:
+				prev();
+				return value;
+		}
+	}
+
+	int PP_Expression::relational_expression()
+	{
+		int value = shift_expression();
+		switch (next())
+		{
+			case PP_LANGLE:
+				return value < relational_expression();
+			case PP_RANGLE:
+				return value > relational_expression();
+			case PP_LE:
+				return value <= relational_expression();
+			case PP_GE:
+				return value >= relational_expression();
+			default:
+				prev();
+				return value;
+		}
+	}
+
+	int PP_Expression::shift_expression()
+	{
+		int value = additive_expression();
+		switch (next())
+		{
+			case PP_LTLT:
+				return value << shift_expression();
+			case PP_GTGT:
+				return value >> shift_expression();
+			default:
+				prev();
+				return value;
+		}
+	}
+
+	int PP_Expression::additive_expression()
+	{
+		int value = multiplicative_expression();
+		switch (next())
+		{
+			case PP_PLUS:
+				return value + additive_expression();
+			case PP_MINUS:
+				return value - additive_expression();
+			default:
+				prev();
+				return value;
+		}
+	}
+
+	int PP_Expression::multiplicative_expression()
+	{
+		int value = unary_expression();
+		switch (next())
+		{
+			case PP_STAR:
+				return value * multiplicative_expression();
+			case PP_PERCENT:
+			{
+				int remainder = multiplicative_expression();
+				return remainder ? value % remainder : 0;
+			}
+			case PP_SLASH:
+			{
+				int div = multiplicative_expression();
+				return div ? value / div : 0;
+			}
+			default:
+				prev();
+				return value;
+		};
+	}
+
+	int PP_Expression::unary_expression()
+	{
+		switch (next())
+		{
+			case PP_PLUS:
+				return unary_expression();
+			case PP_MINUS:
+				return -unary_expression();
+			case PP_NOT:
+				return !unary_expression();
+			case PP_TILDE:
+				return ~unary_expression();
+			case PP_MOC_TRUE:
+				return 1;
+			case PP_MOC_FALSE:
+				return 0;
+			default:
+				prev();
+				return primary_expression();
+		}
+	}
+
+	bool PP_Expression::unary_expression_lookup()
+	{
+		Token t = lookup();
+		return (primary_expression_lookup()
+			|| t == PP_PLUS
+			|| t == PP_MINUS
+			|| t == PP_NOT
+			|| t == PP_TILDE
+			|| t == PP_DEFINED);
+	}
+
+	int PP_Expression::primary_expression()
+	{
+		int value;
+		if (test(PP_LPAREN))
+		{
+			value = conditional_expression();
+			test(PP_RPAREN);
+		}
+		else
+		{
+			next();
+			value = std::stoi(lexem());
+			// TODO
+			//value = lexem().toInt(0, 0);
+		}
+		return value;
+	}
+
+	bool PP_Expression::primary_expression_lookup()
+	{
+		Token t = lookup();
+		return (t == PP_IDENTIFIER
+			|| t == PP_INTEGER_LITERAL
+			|| t == PP_FLOATING_LITERAL
+			|| t == PP_MOC_TRUE
+			|| t == PP_MOC_FALSE
+			|| t == PP_LPAREN);
+	}
+
+	int Preprocessor::evaluateCondition()
+	{
+		PP_Expression expression;
+		expression.g_include_file_stack = g_include_file_stack;
+
+		substituteUntilNewline(expression.symbols);
+
+		return expression.value();
+	}
+
+	static void merge_string_literals(std::vector<Symbol> *_symbols)
+	{
+		std::vector<Symbol>& symbols = *_symbols;
+		for (std::vector<Symbol>::iterator i = symbols.begin(); i != symbols.end(); ++i)
+		{
+			if (i->token == STRING_LITERAL)
+			{
+				std::vector<Symbol>::iterator mergeSymbol = i;
+				uint64 literalsLength = mergeSymbol->len;
+				while (++i != symbols.end() && i->token == STRING_LITERAL)
+					literalsLength += i->len - 2; // no quotes
+
+				if (literalsLength != mergeSymbol->len)
+				{
+					std::string mergeSymbolOriginalLexem = mergeSymbol->unquotedLexem();
+					std::string &mergeSymbolLexem = mergeSymbol->lex;
+					mergeSymbolLexem.resize(0);
+					mergeSymbolLexem.reserve(literalsLength);
+					mergeSymbolLexem.push_back('"');
+					mergeSymbolLexem.append(mergeSymbolOriginalLexem);
+					for (std::vector<Symbol>::const_iterator j = mergeSymbol + 1; j != i; ++j)
+						mergeSymbolLexem.append(j->lex.data() + j->from + 1, j->len - 2); // append j->unquotedLexem()
+					mergeSymbolLexem.push_back('"');
+					mergeSymbol->len = mergeSymbol->lex.length();
+					mergeSymbol->from = 0;
+					i = symbols.erase(mergeSymbol + 1, i);
+				}
+				if (i == symbols.end())
+					break;
+			}
+		}
+	}
+
+	static std::string searchIncludePaths(const std::vector<Parser::IncludePath> &includepaths,
+		const std::string &include)
+	{
+		std::filesystem::path fi;
+		for (int j = 0; j < includepaths.size() && !std::filesystem::exists(fi); ++j)
+		{
+			const Parser::IncludePath &p = includepaths.at(j);
+			if (p.isFrameworkPath)
+			{
+				const uint64 slashPos = include.find('/');
+				if (slashPos == -1)
+					continue;
+				fi = p.path + '/' + subset(include, 0, slashPos) + ".framework/Headers/";
+				fi += subset(include, slashPos + 1);
+				// fi.setFile(std::string::fromLocal8Bit(p.path + '/' + include.left(slashPos) + ".framework/Headers/"),
+				// std::string::fromLocal8Bit(include.mid(slashPos + 1)));
+			}
+			else
+			{
+				fi = p.path + '/' + include;
+			}
+			// try again, maybe there's a file later in the include paths with the same name
+			// (186067)
+			if (std::filesystem::is_directory(fi))
+			{
+				fi.clear();
+				continue;
+			}
+		}
+
+		if (!std::filesystem::exists(fi) || std::filesystem::is_directory(fi))
+			return std::string();
+
+		return fi.string();
+	}
+
+	std::string Preprocessor::resolveInclude(const std::string &include, const std::string &relativeTo)
+	{
+		if (!relativeTo.empty())
+		{
+			std::filesystem::path fi;
+			fi = relativeTo;
+			fi /= include;
+			if (std::filesystem::exists(fi) && std::filesystem::is_directory(fi))
+				return fi.string();
+		}
+
+		auto it = nonlocalIncludePathResolutionCache.find(include);
+		if (it == nonlocalIncludePathResolutionCache.end())
+		{
+			it = nonlocalIncludePathResolutionCache.insert_or_assign(it, include, searchIncludePaths(includes, include));
+			//it = nonlocalIncludePathResolutionCache.insert(include, searchIncludePaths(includes, include));
+		}
+		return it->second;
+	}
+
+	void Preprocessor::preprocess_internal(const std::string &filename, std::vector<Symbol>& symbols, std::vector<Symbol> &preprocessed, bool preprocess)
+	{
+		g_include_file_stack.push(filename);
+		preprocessed.reserve(preprocessed.size() + symbols.size());
+		uint64 index = 0;
+		while (index < symbols.size())
+		{
+			Symbol& symbol = symbols[index];
+			std::string& lexem = symbol.lexem();
+			Token token = symbol.token;
+
+			switch (token)
+			{
+				case PP_INCLUDE:
+				{
+					uint64 lineNum = symbol.lineNum;
+					std::string include;
+					bool local = false;
+
+					if (index < symbols.size() && symbols.at(index).token == PP_STRING_LITERAL)
+					{
+						index++;
+						// TODO
+						local = lexem[0] == '\"'; // same as '"'
+						include = symbols.at(index - 1).unquotedLexem();
+					}
+					else
+						continue;
+
+					while (index < symbols.size() != PP_NEWLINE)
+					{
+						index++;
+					}
+
+					include = resolveInclude(include, local ? filename : std::string());
+					if (include.empty())
+						continue;
+
+					if (Preprocessor::preprocessedIncludes.find(include) != Preprocessor::preprocessedIncludes.end())
+						continue;
+
+					Preprocessor::preprocessedIncludes.insert(include);
+
+					std::vector<Symbol> saveSymbols = symbols;
+					uint64 saveIndex = index;
+
+					FILE* file = fopen(include.c_str(), "r");
+
+					if (!file)
+					{
+						continue;
+					}
+
+					auto include_symbols = tokenize(file, preprocess);
+
+					fclose(file);
+
+					if (!include_symbols.empty())
+					{
+						symbols = include_symbols;
+					}
+					else
+					{
+						continue;
+					}
+
+					index = 0;
+
+					// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
+					preprocessed.push_back(Symbol(0, MOC_INCLUDE_BEGIN, include));
+					preprocess_internal(include, symbols, preprocessed, preprocess);
+					preprocessed.push_back(Symbol(lineNum, MOC_INCLUDE_END, include));
+
+					symbols = saveSymbols;
+					index = saveIndex;
+					continue;
+				}
+				case PP_DEFINE:
+				{
+					while (index < symbols.size() && symbols[index++].token != PP_WHITESPACE);
+
+					std::string name = symbols[index].lexem();
+
+					if (name.empty() || !is_ident_start(name[0]))
+						error();
+
+					Macro macro;
+					macro.isVariadic = false;
+
+					if (index < symbols.size() && symbols[index].token == LPAREN)
+					{
+						++index;
+						// we have a function macro
+						macro.isFunction = true;
+						parseDefineArguments(&macro);
+					}
+					else
+					{
+						macro.isFunction = false;
+					}
+
+					uint64 start = index;
+					while (index < symbols.size() && symbols[index++].token != PP_NEWLINE);
+					macro.symbols.reserve(index - start - 1);
+
+					// remove whitespace where there shouldn't be any:
+					// Before and after the macro, after a # and around ##
+					Token lastToken = HASH; // skip whitespace at the beginning
+					for (uint64 i = start; i < index - 1; ++i)
+					{
+						Token token = symbols[i].token;
+						if (token == PP_WHITESPACE)
+						{
+							if (lastToken == PP_HASH || lastToken == HASH ||
+								lastToken == PP_HASHHASH ||
+								lastToken == PP_WHITESPACE || lastToken == WHITESPACE)
+								continue;
+						}
+						else if (token == PP_HASHHASH)
+						{
+							if (!macro.symbols.empty() &&
+								(lastToken == PP_WHITESPACE || lastToken == WHITESPACE))
+								macro.symbols.pop_back();
+						}
+						macro.symbols.push_back(symbols[i]);
+						lastToken = token;
+					}
+					// remove trailing whitespace
+					while (!macro.symbols.empty() &&
+						(macro.symbols.back().token == PP_WHITESPACE || macro.symbols.back().token == WHITESPACE))
+						macro.symbols.pop_back();
+
+					if (!macro.symbols.empty())
+					{
+						if (macro.symbols.front().token == PP_HASHHASH ||
+							macro.symbols.back().token == PP_HASHHASH)
+						{
+							error("'##' cannot appear at either end of a macro expansion");
+						}
+					}
+					macros.insert_or_assign(name, macro);
+					continue;
+				}
+				case PP_UNDEF:
+				{
+					while (index < symbols.size() && symbols[index++].token != PP_WHITESPACE);
+					std::string name = symbols[index].lexem();
+					macros.erase(name);
+
+					while (index < symbols.size() && symbols[index++].token != PP_NEWLINE);
+
+					continue;
+				}
+				case PP_IDENTIFIER:
+				{
+					// substitute std::unordered_map<std::string, Macro>
+					macroExpand(&preprocessed, this, symbols, index, symbol.lineNum, true);
+					continue;
+				}
+				case PP_HASH:
+					until(PP_NEWLINE);
+					continue; // skip unknown preprocessor statement
+				case PP_IFDEF:
+				case PP_IFNDEF:
+				case PP_IF:
+					while (!evaluateCondition())
+					{
+						if (!skipBranch())
+							break;
+						if (test(PP_ELIF))
+						{
+						}
+						else
+						{
+							until(PP_NEWLINE);
+							break;
+						}
+					}
+					continue;
+				case PP_ELIF:
+				case PP_ELSE:
+					skipUntilEndif();
+					Q_FALLTHROUGH();
+				case PP_ENDIF:
+					until(PP_NEWLINE);
+					continue;
+				case PP_NEWLINE:
+					index++;
+					continue;
+				case SIGNALS:
+				case SLOTS:
+				{
+					Symbol sym = symbol;
+					if (macros.find("QT_NO_KEYWORDS") != macros.end())
+						sym.token = IDENTIFIER;
+					else
+						sym.token = (token == SIGNALS ? Q_SIGNALS_TOKEN : Q_SLOTS_TOKEN);
+					preprocessed.push_back(sym);
+				} continue;
+				default:
+					break;
+			}
+			preprocessed.push_back(symbol);
+			index++;
+		}
+
+		g_include_file_stack.pop();
+	}
+
+	std::vector<Symbol> Preprocessor::preprocess(const std::string &filename, FILE*& device, std::vector<Symbol>& symbols, bool preprocess)
+	{
+		this->symbols = symbols;
+
+		#if 0
+		for (int j = 0; j < symbols.size(); ++j)
+			fprintf(stderr, "line %d: %s(%s)\n",
+				symbols[j].lineNum,
+				symbols[j].lexem().constData(),
+				tokenTypeName(symbols[j].token));
+		#endif
+
+		// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
+		std::vector<Symbol> result;
+		// Preallocate some space to speed up the code below.
+		// The magic value was found by logging the final size
+		// and calculating an average when running moc over FOSS projects.
+		std::ifstream ifs(device);
+		ifs.seekg(0, ifs.end);
+		uint64 length = ifs.tellg();
+		ifs.seekg(0, ifs.beg);
+		result.reserve(length / 300000);
+
+		preprocess_internal(filename, symbols, result, preprocess);
+
+		merge_string_literals(&result);
+
+		#if 0
+		for (int j = 0; j < result.size(); ++j)
+			fprintf(stderr, "line %d: %s(%s)\n",
+				result[j].lineNum,
+				result[j].lexem().constData(),
+				tokenTypeName(result[j].token));
+		#endif
+
+		return result;
+	}
+
+	void Preprocessor::parseDefineArguments(Macro *m)
+	{
+		std::vector<Symbol> arguments;
+		while (hasNext())
+		{
+			while (test(PP_WHITESPACE))
+			{
+			}
+			Token t = next();
+			if (t == PP_RPAREN)
+				break;
+			if (t != PP_IDENTIFIER)
+			{
+				std::string l = lexem();
+				if (l == "...")
+				{
+					m->isVariadic = true;
+					arguments.push_back(Symbol(symbol().lineNum, PP_IDENTIFIER, "__VA_ARGS__"));
+					while (test(PP_WHITESPACE))
+					{
+					}
+					if (!test(PP_RPAREN))
+						error("missing ')' in macro argument list");
+					break;
+				}
+				else if (!is_identifier(l.data(), l.length()))
+				{
+					error("Unexpected character in macro argument list.");
+				}
+			}
+
+			Symbol arg = symbol();
+			if (std::find(arguments.begin(), arguments.end(), arg) != arguments.end())
+				error("Duplicate macro parameter.");
+			arguments.push_back(symbol());
+
+			while (test(PP_WHITESPACE))
+			{
+			}
+			t = next();
+			if (t == PP_RPAREN)
+				break;
+			if (t == PP_COMMA)
+				continue;
+			if (lexem() == "...")
+			{
+				//GCC extension:    #define FOO(x, y...) x(y)
+				// The last argument was already parsed. Just mark the macro as variadic.
+				m->isVariadic = true;
+				while (test(PP_WHITESPACE))
+				{
+				}
+				if (!test(PP_RPAREN))
+					error("missing ')' in macro argument list");
+				break;
+			}
+			error("Unexpected character in macro argument list.");
+		}
+		m->arguments = arguments;
+		while (test(PP_WHITESPACE))
+		{
+		}
+	}
+
+	void Preprocessor::until(Token t)
+	{
+		while (hasNext() && next() != t)
+			;
+	}
+	}
