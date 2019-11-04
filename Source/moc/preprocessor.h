@@ -248,16 +248,8 @@ namespace header_tool
 		SymbolStack symbolstack;
 		Symbol symbol = identifier;
 
-		for (;;)
+		auto skip_replace = [&]()
 		{
-			if (symbolstack.size() > 0)
-			{
-				symbol = symbolstack.back().symbols[symbolstack.back().index];
-			}
-
-			auto macro_itr = g_macros.find(symbol.lexem());
-
-			// not a macro
 			bool skip_replace = false;
 			for (int i = 0; i < symbolstack.size(); ++i)
 			{
@@ -267,9 +259,20 @@ namespace header_tool
 				}
 			}
 
-			if (symbol.token != EToken::IDENTIFIER || macro_itr == g_macros.end() || skip_replace)
+			return skip_replace;
+		};
+
+		for (;;)
+		{
+			if (symbolstack.size() > 0)
 			{
-				// not a macro
+				symbol = symbolstack.back().symbols[symbolstack.back().index];
+			}
+
+			auto macro_itr = g_macros.find(symbol.lexem());
+
+			if (symbol.token != EToken::IDENTIFIER || macro_itr == g_macros.end() || skip_replace())
+			{
 				if (symbolstack.size() > 0)
 				{
 					symbol = symbolstack.back().symbols[symbolstack.back().index];
