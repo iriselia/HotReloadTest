@@ -1,12 +1,15 @@
-/*
- *
- *
- * /
- */
-'x'
-'\''
-'\n'
-'\u02c0'
+#define one 1
+#define two 2
+#define wefwef (one + (two + 3))
+int iphone = wefwef + wefwef;
+//123
+//#if wefwef
+//#ifdef wefwef
+//#ifndef wefwef
+//#elif !defined wefwef
+//#if !defined wefwef
+#undef wefwef // have to do this
+int i = wefwef;
 
   # define define \
   define
@@ -17,21 +20,13 @@ int a = 1.1;
 # define n(x, static_cast) int i = 0;
 
 # define name 1
-# define name int a = 3;
-# define name(x, y) (for(;;){})
-# define name(format, ...) fprintf (stderr, format, __VA_ARGS__)
+//# define name int a = 3;
+//# define name(x, y) (for(;;){})
+//# define name(format, ...) fprintf (stderr, format, __VA_ARGS__)
 
-#define wefwef (1 + (2 + 3))
-//123
-#if wefwef
-#ifdef wefwef
-#ifndef wefwef
-#elif !defined wefwef
-#if !defined wefwef
-#undef wefwef
 
-#include<stdio>
-#include <gfx_d3d/r_shader_resources.h"
+//#include<stdio>
+//#include <gfx_d3d/r_shader_resources.h"
 
 int wefwef()
 {

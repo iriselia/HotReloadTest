@@ -13,11 +13,12 @@ namespace header_tool
 {
 	enum class TokenizeMode
 	{
-		CppKeyword,
+		Cpp,
 		CppIdentifier,
 		CppExpression,
 		PreprocKeyword,
-		PreprocDefineIdentifier,
+		PreprocMacroIdentifier,
+		PreprocMacroExpression,
 		PreprocExpression,
 	};
 
@@ -132,14 +133,15 @@ namespace header_tool
 		const short (*transitions)[128];
 		switch (mode)
 		{
-		case TokenizeMode::CppKeyword:
+		case TokenizeMode::Cpp:
 		case TokenizeMode::CppIdentifier:
 		case TokenizeMode::CppExpression:
+		case TokenizeMode::PreprocMacroExpression:
 			states = s_keyword_states;
 			transitions = s_keyword_transitions;
 			break;
 		case TokenizeMode::PreprocKeyword:
-		case TokenizeMode::PreprocDefineIdentifier:
+		case TokenizeMode::PreprocMacroIdentifier:
 		case TokenizeMode::PreprocExpression:
 			states = s_preproc_keyword_states;
 			transitions = s_preproc_keyword_transitions;
@@ -191,21 +193,29 @@ namespace header_tool
 
 		switch (mode)
 		{
-		case TokenizeMode::PreprocKeyword:
-			break;
-		case TokenizeMode::PreprocDefineIdentifier:
-			assert(state->token != EToken::PREPROC_DEFINED); // Reserved macro name
-		default:
-			if (state->identifier == EToken::IDENTIFIER)
+		case TokenizeMode::Cpp:
+		{
+			if (state->token != EToken::CHARACTER)
 			{
-				// complete identifier
-				while (is_ident_char(*data))
-				{
-					data++;
-				}
-				return state->identifier;
+				return state->token;
 			}
-			break;
+		} break;
+		case TokenizeMode::PreprocKeyword:
+		{
+			return state->token;
+		} break;
+		case TokenizeMode::PreprocMacroIdentifier:
+			assert(state->token != EToken::PREPROC_DEFINED); // Reserved macro name
+		}
+
+		if (state->identifier == EToken::IDENTIFIER)
+		{
+			// complete identifier
+			while (is_ident_char(*data))
+			{
+				data++;
+			}
+			return state->identifier;
 		}
 
 		return state->token;
@@ -234,7 +244,7 @@ namespace header_tool
 		begin = input.data();
 		data = begin;
 
-		TokenizeMode mode = TokenizeMode::CppKeyword;
+		TokenizeMode mode = TokenizeMode::Cpp;
 
 		while (*data)
 		{
@@ -242,32 +252,46 @@ namespace header_tool
 
 			auto push_symbol = [&](EToken token)
 			{
+				assert((data - lexem) > 0);
 				symbols.emplace_back(line_num, token, input, lexem - begin, data - lexem);
 				column++;
 				lexem = data;
 				return token;
 			};
 
-			auto skip_whitespace = [&]()
+			auto skip_character = [&]()
+			{
+				if (*(data + 1) != 0)
+				{
+					data++;
+				}
+				else
+				{
+					assert(false);
+				}
+			};
+
+			auto skip_whitespaces = [&]()
 			{
 				int count = 0;
 				while (*data && (*data == ' ' || *data == '\t'))
 				{
-					data++;
+					skip_character();
 					lexem++;
 					count++;
 				}
 				return count;
 			};
 
-			auto push_whitespace = [&]()
+			auto push_whitespaces = [&]()
 			{
 				int count = 0;
 				while (*data && (*data == ' ' || *data == '\t'))
 				{
-					symbols.emplace_back(line_num, *data == ' ' ? EToken::WHITESPACE : EToken::WHITESPACE_ALIAS, input, lexem - begin, data - lexem);
-					data++;
+					skip_character();
 					column++;
+					assert((data - lexem) > 0);
+					symbols.emplace_back(line_num, *data == ' ' ? EToken::WHITESPACE : EToken::WHITESPACE_ALIAS, input, lexem - begin, data - lexem);
 					lexem = data;
 					count++;
 				}
@@ -301,13 +325,15 @@ namespace header_tool
 			case EToken::NULL_TOKEN:
 				assert(false);
 				if (*data)
-					++data;
+				{
+					skip_character();
+				}
 				break;
 			case EToken::PREPROC_HASH:
 			{
 				// #
 				push_symbol(token);
-				push_whitespace();
+				push_whitespaces();
 
 				EToken preproc_directive = push_symbol(next_token(TokenizeMode::PreprocKeyword, data));
 				switch (preproc_directive)
@@ -329,16 +355,16 @@ namespace header_tool
 				case EToken::PREPROC_DEFINE:
 				{
 					// # define
-					assert(push_whitespace());
+					assert(push_whitespaces());
 					// # define name
-					push_symbol(next_token(TokenizeMode::PreprocDefineIdentifier, data));
+					push_symbol(next_token(TokenizeMode::PreprocMacroIdentifier, data));
 					// # define name
 					// # define name value
 					// # define name (expression)
 					// # define name(x, y) (expression)
 					// # define name(x, ...) (expression)
 					// todo: check RVO
-					mode = TokenizeMode::CppExpression;
+					mode = TokenizeMode::PreprocMacroExpression;
 					/*
 					while (*data != '\n' && *data != '\\')
 					{
@@ -350,13 +376,13 @@ namespace header_tool
 				case EToken::PREPROC_INCLUDE:
 				{
 					// # include
-					push_whitespace();
+					push_whitespaces();
 					// " or <
 					token = push_symbol(next_token(TokenizeMode::PreprocKeyword, data));
 					assert(token == EToken::QUOTE || token == EToken::LANGLE);
-					while (*data && *data != '\n' && *data != '>' && *data != '"')
+					while (*data != '\n' && *data != '>' && *data != '"')
 					{
-						++data;
+						skip_character();
 					}
 					push_symbol(EToken::STRING_LITERAL);
 					// " or >
@@ -367,9 +393,9 @@ namespace header_tool
 				case EToken::PREPROC_ERROR:
 				{
 					push_symbol(token);
-					while (*data && *data != '\n')
+					while (*data != '\n')
 					{
-						++data;
+						skip_character();
 					}
 					push_symbol(EToken::STRING_LITERAL);
 				} break;
@@ -382,7 +408,7 @@ namespace header_tool
 			break;
 			case EToken::PREPROC_HASHHASH:
 			{
-				if (mode == TokenizeMode::CppKeyword)
+				if (mode == TokenizeMode::Cpp)
 				{
 					assert(false);
 					continue;
@@ -391,20 +417,20 @@ namespace header_tool
 			} break;
 			case EToken::QUOTE:
 			{
-				while (*data && (*data != '\"'))
+				while (*data != '\"')
 				{
 					if (*data == '\\')
 					{
-						++data;
+						skip_character();
 						if (!*data) break;
 					}
-					++data;
+					skip_character();
 				}
 
 				if (*data)  //Skip last quote
-					++data;
+					skip_character();
 
-				token = EToken::STRING_LITERAL;
+				push_symbol(EToken::STRING_LITERAL);
 				/*
 				// concatenate multi-line strings for easier
 				// STRING_LITERAL handling in moc
@@ -429,14 +455,14 @@ namespace header_tool
 				// universal character (e.g., '\u02C0').
 				if (*data == '\\')
 				{
-					data++;
+					skip_character();
 					// do-while loop to process '\'' easily
 					do
 					{
-						data++;
+						skip_character();
 					}
-					while (*data && *data != '\'');
-					data++;
+					while (*data != '\'');
+					skip_character();
 				}
 				// plain character (e.g., 'x')
 				else
@@ -455,7 +481,9 @@ namespace header_tool
 			} break;
 			case EToken::DIGIT:
 				while (is_digit_char(*data) || *data == '\'')
-					++data;
+				{
+					skip_character();
+				}
 				if (!*data || *data != '.')
 				{
 					token = EToken::INTEGER_LITERAL;
@@ -463,30 +491,40 @@ namespace header_tool
 						(*data == 'x' || *data == 'X')
 						&& *lexem == '0')
 					{
-						++data;
+						skip_character();
 						while (is_hex_char(*data) || *data == '\'')
-							++data;
+						{
+							skip_character();
+						}
 					}
 					push_symbol(token);
 					break;
 				}
 				token = EToken::FLOATING_LITERAL;
-				++data;
+				skip_character();
 				[[fallthrough]];
 			case EToken::FLOATING_LITERAL:
 				while (is_digit_char(*data) || *data == '\'')
-					++data;
+				{
+					skip_character();
+				}
 				if (*data == '+' || *data == '-')
-					++data;
+				{
+					skip_character();
+				}
 				if (*data == 'e' || *data == 'E')
 				{
-					++data;
+					skip_character();
 					while (is_digit_char(*data) || *data == '\'')
-						++data;
+					{
+						skip_character();
+					}
 				}
 				if (*data == 'f' || *data == 'F'
 					|| *data == 'l' || *data == 'L')
-					++data;
+				{
+					skip_character();
+				}
 				push_symbol(token);
 				break;
 			case EToken::CHARACTER:
@@ -494,29 +532,31 @@ namespace header_tool
 				break;
 			case EToken::C_COMMENT:
 			{
-				while (*data && (*(data - 1) != '/' || *(data - 2) != '*'))
+				while (*(data - 1) != '/' || *(data - 2) != '*')
 				{
 					//if (*data == '\n')
 					//	++line_num;
-					++data;
+					skip_character();
 				}
 				push_symbol(EToken::C_COMMENT);
 			} break;
+			case EToken::WHITESPACE_ALIAS:
 			case EToken::WHITESPACE:
+			{
 				column--;
 				push_symbol(token);
 				//while (*data && (*data == ' ' || *data == '\t'))
 				//	++data;
 				//if (preprocess) // tokenize whitespace
 				//	break;
-				//continue;
-				break;
+				continue;
+			} break;
 			case EToken::CPP_COMMENT:
 			{
 				push_symbol(token);
-				while (*data && *data != '\n')
+				while (*data != '\n')
 				{
-					++data;
+					skip_character();
 				}
 				push_symbol(EToken::CPP_COMMENT);
 				continue;
@@ -525,7 +565,7 @@ namespace header_tool
 			{
 				line_num++;
 				push_symbol(token);
-				mode = TokenizeMode::CppKeyword;
+				mode = TokenizeMode::Cpp;
 				column = 0;
 				continue;
 			} break;
@@ -541,15 +581,6 @@ namespace header_tool
 					assert(false);
 				}
 			} break;
-			/*
-			case EToken::LANGLE:
-				if (mode != TokenizeMode::TokenizeInclude)
-					break;
-				token = EToken::STRING_LITERAL;
-				while (*data && *data != '\n' && *(data - 1) != '>')
-					++data;
-				break;
-			*/
 			default:
 			{
 				push_symbol(token);

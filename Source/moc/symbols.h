@@ -15,9 +15,9 @@ namespace header_tool
 	struct Symbol
 	{
 		uint64 line_num;
+		EToken token;
 		const char* lex_view;
 		std::string lex;
-		EToken token;
 		uint64 from;
 		uint64 len;
 
@@ -68,7 +68,7 @@ namespace header_tool
 	public:
 		inline bool has_next()
 		{
-			while (!empty() && !(back().index + 1 < back().symbols.size()))
+			while (!empty() && !(back().index < back().symbols.size()))
 			{
 				pop_back();
 			}
@@ -78,7 +78,7 @@ namespace header_tool
 
 		inline EToken next()
 		{
-			while (!empty() && !(back().index + 1 < back().symbols.size()))
+			while (!empty() && !(back().index < back().symbols.size()))
 			{
 				pop_back();
 			}
@@ -94,13 +94,20 @@ namespace header_tool
 		inline bool test(EToken token)
 		{
 			size_t stackPos = size() - 1;
-			while (stackPos >= 0 && data()[stackPos].index >= data()[stackPos].symbols.size())
+			while (stackPos >= 0
+				&& data()[stackPos].index >= data()[stackPos].symbols.size())
+			{
 				--stackPos;
+			}
+
 			if (stackPos < 0)
+			{
 				return false;
+			}
+
 			if (data()[stackPos].symbols[data()[stackPos].index].token == token)
 			{
-				next();
+				back().index++;
 				return true;
 			}
 			return false;

@@ -456,7 +456,7 @@ Meta Object Compiler.
 				{
 					moc.symbols.emplace_back(0, EToken::MOC_INCLUDE_BEGIN, rawName);
 					auto symbols = tokenize(input, args.expandOnly);
-					auto temp = preprocess(rawName, f, symbols, args.expandOnly);
+					auto temp = std::vector<Symbol>();// (rawName, f, symbols, args.expandOnly);
 					moc.symbols.insert(moc.symbols.end(), temp.begin(), temp.end());
 					moc.symbols.emplace_back(0, EToken::MOC_INCLUDE_END, rawName);
 				}
@@ -474,7 +474,7 @@ Meta Object Compiler.
 
 
 		symbols = tokenize(input, args.expandOnly);
-		//symbols = preprocess(moc.filename, in, symbols, args.expandOnly);
+		symbols = preprocess(moc.filename, input, symbols, args.expandOnly);
 
 		if (!args.expandOnly)
 		{

@@ -55,272 +55,266 @@ namespace header_tool
 		exit(EXIT_FAILURE);
 	}
 
-	inline static void expand_macro(std::vector<Symbol>& into, const std::vector<Symbol>& toExpand, uint64& index, uint64 lineNum, bool one, const std::set<std::string>& excludeSymbols);
+	inline static void expand_macro(std::vector<Symbol>& into, const Symbol& toExpand, uint64 lineNum, const std::set<std::string>& excludeSymbols);
 
-	inline static std::vector<Symbol> expand_macro_identifier(/* Preprocessor *that, */ SymbolStack &symbols, uint64 lineNum, std::string *macroName)
+	inline static std::vector<Symbol> expand_function_macro(Symbol symbol, SymbolStack &symbolstack, uint64 lineNum, Macro2 macro)
 	{
-		Symbol s = symbols.back().symbols[symbols.back().index];
-
-		auto macro_itr = g_macros.find(s.lexem());
-
-		// not a macro
-		bool skip_replace = false;
-		for (int i = 0; i < symbols.size(); ++i)
-		{
-			if (s.lexem() == symbols[i].expandedMacro || (symbols[i].excludedSymbols.find(s.lexem()) != symbols[i].excludedSymbols.end()))
-			{
-				skip_replace = true;
-			}
-		}
-
-		if (s.token != EToken::IDENTIFIER || macro_itr == g_macros.end() || skip_replace)
-		{
-			return std::vector<Symbol>();
-		}
-
-		const Macro2 &macro = (*macro_itr).second;
-		*macroName = s.lexem();
+		Symbol s = symbol;
 
 		std::vector<Symbol> expansion;
-		if (!macro.isFunction)
+
+		if (symbolstack.back().symbols[symbolstack.back().index].token != EToken::LPAREN)
 		{
-			expansion = macro.symbols;
+			// tokenized incorrectly
+			assert(false);
 		}
-		else
+
+		std::vector<std::vector<Symbol>> arguments;
+		arguments.reserve(5);
+		while (symbolstack.has_next())
 		{
-			bool haveSpace = false;
-			while (symbols.test(EToken::WHITESPACE))
+			std::vector<Symbol> argument;
+			// strip leading space
+			while (symbolstack.back().symbols[symbolstack.back().index].token == EToken::WHITESPACE
+				|| symbolstack.back().symbols[symbolstack.back().index].token == EToken::WHITESPACE_ALIAS)
 			{
-				haveSpace = true;
+				symbolstack.back().index++;
 			}
-			if (!symbols.test(EToken::LPAREN))
+			int nesting = 0;
+			bool vararg = macro.isVariadic && (arguments.size() == macro.arguments.size() - 1);
+			while (symbolstack.has_next())
 			{
-				*macroName = std::string();
-				std::vector<Symbol> syms;
-				if (haveSpace)
-					syms.push_back(Symbol(lineNum, EToken::WHITESPACE));
-				syms.push_back(s);
-				syms.back().line_num = lineNum;
-				return syms;
-			}
-			std::vector<std::vector<Symbol>> arguments;
-			arguments.reserve(5);
-			while (symbols.has_next())
-			{
-				std::vector<Symbol> argument;
-				// strip leading space
-				while (symbols.test(EToken::WHITESPACE))
+				EToken t = symbolstack.next();
+				if (t == EToken::LPAREN)
 				{
+					++nesting;
 				}
-				int nesting = 0;
-				bool vararg = macro.isVariadic && (arguments.size() == macro.arguments.size() - 1);
-				while (symbols.has_next())
+				else if (t == EToken::RPAREN)
 				{
-					EToken t = symbols.next();
-					if (t == EToken::LPAREN)
-					{
-						++nesting;
-					}
-					else if (t == EToken::RPAREN)
-					{
-						--nesting;
-						if (nesting < 0)
-							break;
-					}
-					else if (t == EToken::COMMA && nesting == 0)
-					{
-						if (!vararg)
-							break;
-					}
-					argument.push_back(symbols.back().symbols[symbols.back().index]);
+					--nesting;
+					if (nesting < 0)
+						break;
 				}
-				arguments.push_back(argument);
-
-				if (nesting < 0)
-					break;
-				else if (!symbols.has_next())
-					error(g_include_file_stack.top(), symbols.back().symbols[symbols.back().index].line_num, "missing ')' in macro usage");
-			}
-
-			// empty VA_ARGS
-			if (macro.isVariadic && arguments.size() == macro.arguments.size() - 1)
-			{
-				// todo:
-				// arguments += std::vector<Symbol>();
-			}
-
-			// now replace the macro arguments with the expanded arguments
-			enum Mode
-			{
-				Normal,
-				Hash,
-				HashHash
-			} mode = Normal;
-
-			for (int i = 0; i < macro.symbols.size(); ++i)
-			{
-				const Symbol &s = macro.symbols[i];
-				if (s.token == EToken::PREPROC_HASH || s.token == EToken::PREPROC_HASHHASH)
+				else if (t == EToken::COMMA && nesting == 0)
 				{
-					mode = (s.token == EToken::PREPROC_HASH ? Hash : HashHash);
+					if (!vararg)
+						break;
+				}
+				argument.push_back(symbolstack.back().symbols[symbolstack.back().index]);
+			}
+			arguments.push_back(argument);
+
+			if (nesting < 0)
+				break;
+			else if (!symbolstack.has_next())
+				error(g_include_file_stack.top(), symbolstack.back().symbols[symbolstack.back().index].line_num, "missing ')' in macro usage");
+		}
+
+		// empty VA_ARGS
+		if (macro.isVariadic && arguments.size() == macro.arguments.size() - 1)
+		{
+			// todo:
+			// arguments += std::vector<Symbol>();
+		}
+
+		// now replace the macro arguments with the expanded arguments
+		enum Mode
+		{
+			Normal,
+			Hash,
+			HashHash
+		} mode = Normal;
+
+		for (int i = 0; i < macro.symbols.size(); ++i)
+		{
+			const Symbol &s = macro.symbols[i];
+			if (s.token == EToken::PREPROC_HASH || s.token == EToken::PREPROC_HASHHASH)
+			{
+				mode = (s.token == EToken::PREPROC_HASH ? Hash : HashHash);
+				continue;
+			}
+			uint64 index = std::distance(macro.arguments.begin(), std::find(macro.arguments.begin(), macro.arguments.end(), s));
+			if (mode == Normal)
+			{
+				if (index >= 0 && index < arguments.size())
+				{
+					// each argument undergoes macro expansion if it's not used as part of a # or ##
+					if (i == macro.symbols.size() - 1 || macro.symbols.at(i + 1).token != EToken::PREPROC_HASHHASH)
+					{
+						std::vector<Symbol> args = arguments.at(index);
+						uint64 idx = 1;
+
+						std::set<std::string> set;
+						for (int i = 0; i < symbolstack.size(); ++i)
+						{
+							set.insert(symbolstack[i].expandedMacro);
+							set.insert(symbolstack[i].excludedSymbols.begin(), symbolstack[i].excludedSymbols.end());
+						}
+
+						for (int i = 0; i < args.size(); i++)
+						{
+							expand_macro(expansion, args[idx], lineNum, set);
+						}
+
+					}
+					else
+					{
+						expansion.insert(expansion.end(), arguments[index].begin(), arguments[index].end());
+					}
+				}
+				else
+				{
+					expansion.push_back(s);
+				}
+			}
+			else if (mode == Hash)
+			{
+				if (index < 0)
+				{
+					error(g_include_file_stack.top(), s.line_num, "'#' is not followed by a macro parameter");
 					continue;
 				}
-				uint64 index = std::distance(macro.arguments.begin(), std::find(macro.arguments.begin(), macro.arguments.end(), s));
-				if (mode == Normal)
+				else if (index >= arguments.size())
 				{
-					if (index >= 0 && index < arguments.size())
-					{
-						// each argument undergoes macro expansion if it's not used as part of a # or ##
-						if (i == macro.symbols.size() - 1 || macro.symbols.at(i + 1).token != EToken::PREPROC_HASHHASH)
-						{
-							std::vector<Symbol> arg = arguments.at(index);
-							uint64 idx = 1;
-
-							std::set<std::string> set;
-							for (int i = 0; i < symbols.size(); ++i)
-							{
-								set.insert(symbols[i].expandedMacro);
-								set.insert(symbols[i].excludedSymbols.begin(), symbols[i].excludedSymbols.end());
-							}
-
-							expand_macro(expansion, arg, idx, lineNum, false, set);
-						}
-						else
-						{
-							expansion.insert(expansion.end(), arguments[index].begin(), arguments[index].end());
-						}
-					}
-					else
-					{
-						expansion.push_back(s);
-					}
+					error(g_include_file_stack.top(), s.line_num, "Macro invoked with too few parameters for a use of '#'");
+					continue;
 				}
-				else if (mode == Hash)
+
+				const std::vector<Symbol> &arg = arguments.at(index);
+				std::string stringified;
+				for (int i = 0; i < arg.size(); ++i)
 				{
-					if (index < 0)
-					{
-						error(g_include_file_stack.top(), s.line_num, "'#' is not followed by a macro parameter");
-						continue;
-					}
-					else if (index >= arguments.size())
-					{
-						error(g_include_file_stack.top(), s.line_num, "Macro invoked with too few parameters for a use of '#'");
-						continue;
-					}
-
-					const std::vector<Symbol> &arg = arguments.at(index);
-					std::string stringified;
-					for (int i = 0; i < arg.size(); ++i)
-					{
-						stringified += arg.at(i).lexem();
-					}
-					replace_all(stringified, R"(")", R"(\")");
-					stringified.insert(0, 1, '"');
-					stringified.insert(stringified.end(), 1, '"');
-					expansion.push_back(Symbol(lineNum, EToken::STRING_LITERAL, stringified));
+					stringified += arg.at(i).lexem();
 				}
-				else if (mode == HashHash)
-				{
-					if (s.token == EToken::WHITESPACE)
-						continue;
-
-					while (expansion.size() && expansion.back().token == EToken::WHITESPACE)
-						expansion.pop_back();
-
-					Symbol next = s;
-					if (index >= 0 && index < arguments.size())
-					{
-						const std::vector<Symbol> &arg = arguments.at(index);
-						if (arg.size() == 0)
-						{
-							mode = Normal;
-							continue;
-						}
-						next = arg.at(0);
-					}
-
-					if (!expansion.empty() && expansion.back().token == s.token
-						&& expansion.back().token != EToken::STRING_LITERAL)
-					{
-						Symbol last = expansion.back();
-						expansion.pop_back();
-
-						std::string lexem = last.lexem() + next.lexem();
-						expansion.push_back(Symbol(lineNum, last.token, lexem));
-					}
-					else
-					{
-						expansion.push_back(next);
-					}
-
-					if (index >= 0 && index < arguments.size())
-					{
-						const std::vector<Symbol> &arg = arguments.at(index);
-						for (int i = 1; i < arg.size(); ++i)
-							expansion.push_back(arg[i]);
-					}
-				}
-				mode = Normal;
+				replace_all(stringified, R"(")", R"(\")");
+				stringified.insert(0, 1, '"');
+				stringified.insert(stringified.end(), 1, '"');
+				expansion.push_back(Symbol(lineNum, EToken::STRING_LITERAL, stringified));
 			}
-			if (mode != Normal)
-				error(g_include_file_stack.top(), s.line_num, "'#' or '##' found at the end of a macro argument");
+			else if (mode == HashHash)
+			{
+				if (s.token == EToken::WHITESPACE)
+					continue;
 
+				while (expansion.size() && expansion.back().token == EToken::WHITESPACE)
+					expansion.pop_back();
+
+				Symbol next = s;
+				if (index >= 0 && index < arguments.size())
+				{
+					const std::vector<Symbol> &arg = arguments.at(index);
+					if (arg.size() == 0)
+					{
+						mode = Normal;
+						continue;
+					}
+					next = arg.at(0);
+				}
+
+				if (!expansion.empty() && expansion.back().token == s.token
+					&& expansion.back().token != EToken::STRING_LITERAL)
+				{
+					Symbol last = expansion.back();
+					expansion.pop_back();
+
+					std::string lexem = last.lexem() + next.lexem();
+					expansion.push_back(Symbol(lineNum, last.token, lexem));
+				}
+				else
+				{
+					expansion.push_back(next);
+				}
+
+				if (index >= 0 && index < arguments.size())
+				{
+					const std::vector<Symbol> &arg = arguments.at(index);
+					for (int i = 1; i < arg.size(); ++i)
+						expansion.push_back(arg[i]);
+				}
+			}
+			mode = Normal;
 		}
+		if (mode != Normal)
+			error(g_include_file_stack.top(), s.line_num, "'#' or '##' found at the end of a macro argument");
 
 		return expansion;
 	}
 
-	inline void expand_macro(std::vector<Symbol>& into, const std::vector<Symbol>& toExpand, uint64& index, uint64 lineNum, bool one, const std::set<std::string>& excludeSymbols = std::set<std::string>())
+	inline void expand_macro(std::vector<Symbol>& into, const Symbol& identifier, uint64 lineNum, const std::set<std::string>& excludeSymbols = std::set<std::string>())
 	{
-		SymbolStack symbolstack;
-		SafeSymbols sf;
-		sf.symbols = toExpand;
-		sf.index = index;
-		sf.excludedSymbols = excludeSymbols;
-		symbolstack.push_back(sf);
-
-		if (toExpand.empty())
+		if (identifier.token != EToken::IDENTIFIER)
 			return;
+
+		SymbolStack symbolstack;
+		Symbol symbol = identifier;
 
 		for (;;)
 		{
-			std::string macro;
-			std::vector<Symbol> newSyms = expand_macro_identifier(symbolstack, lineNum, &macro);
-
-			if (macro.empty())
+			if (symbolstack.size() > 0)
 			{
-				// skip space
-				while (symbolstack.back().symbols[symbolstack.back().index].token == EToken::WHITESPACE)
+				symbol = symbolstack.back().symbols[symbolstack.back().index];
+			}
+
+			auto macro_itr = g_macros.find(symbol.lexem());
+
+			// not a macro
+			bool skip_replace = false;
+			for (int i = 0; i < symbolstack.size(); ++i)
+			{
+				if (symbol.lexem() == symbolstack[i].expandedMacro || (symbolstack[i].excludedSymbols.find(symbol.lexem()) != symbolstack[i].excludedSymbols.end()))
+				{
+					skip_replace = true;
+				}
+			}
+
+			if (symbol.token != EToken::IDENTIFIER || macro_itr == g_macros.end() || skip_replace)
+			{
+				// not a macro
+				if (symbolstack.size() > 0)
+				{
+					symbol = symbolstack.back().symbols[symbolstack.back().index];
+					symbol.line_num = lineNum;
+					symbolstack.back().index++;
+				}
+				into.push_back(symbol);
+			}
+			else
+			{
+				std::vector<Symbol> newSyms;
+				const Macro2& macro = (*macro_itr).second;
+
+				if (!macro.isFunction)
+				{
+					newSyms = macro.symbols;
+				}
+				else
+				{
+					newSyms = expand_function_macro(symbol, symbolstack, lineNum, &macro);
+				}
+
+				if (symbolstack.size() > 0)
 				{
 					symbolstack.back().index++;
 				}
 
-				// not a macro
-				Symbol s = symbolstack.back().symbols[symbolstack.back().index];
-				s.line_num = lineNum;
-				into.push_back(s);
-			}
-			else
-			{
 				SafeSymbols sf;
 				sf.symbols = newSyms;
 				sf.index = 0;
-				sf.expandedMacro = macro;
+				sf.expandedMacro = symbol.lexem();
 				symbolstack.push_back(sf);
+				continue;
 			}
-			if (!symbolstack.has_next() || (one && symbolstack.size() == 1))
-				break;
-			symbolstack.next();
-		}
 
-		if (symbolstack.size())
-		{
-			++symbolstack.back().index;
-			index = symbolstack.back().index;
-		}
-		else
-		{
-			index = toExpand.size();
+
+			while (!symbolstack.empty() && !(symbolstack.back().index < symbolstack.back().symbols.size()))
+			{
+				symbolstack.pop_back();
+			}
+
+			if (symbolstack.empty())
+			{
+				return;
+			}
 		}
 	}
 
@@ -967,8 +961,15 @@ namespace header_tool
 	}
 	*/
 
-	inline void preprocess(const std::string &filename, std::vector<Symbol>& symbols, std::vector<Symbol> &result, bool preprocess_only)
+	inline std::vector<Symbol> preprocess_internal(const std::string &filename, std::string& input, std::vector<Symbol>& symbols, bool preprocess_only)
 	{
+		// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
+		std::vector<Symbol> result;
+		// Preallocate some space to speed up the code below.
+		// The magic value was found by logging the final size
+		// and calculating an average when running moc over FOSS projects.
+		result.reserve(input.size() / 300000);
+
 		g_include_file_stack.push(filename);
 		result.reserve(result.size() + symbols.size());
 		uint64 index = 0;
@@ -978,7 +979,38 @@ namespace header_tool
 			std::string lexem = symbol.lexem();
 			EToken token = symbol.token;
 
-			index++;
+			auto skip_symbol = [&]()
+			{
+				if (index < (symbols.size() - 1))
+				{
+					index++;
+				}
+				else
+				{
+					assert(false);
+				}
+			};
+
+			auto skip_whitespaces = [&]()
+			{
+				while (symbols[index].token != EToken::WHITESPACE
+					&& symbols[index].token != EToken::WHITESPACE_ALIAS)
+				{
+					skip_symbol();
+				}
+				skip_symbol();
+			};
+
+			auto skip_line = [&]()
+			{
+				while (symbols[index].token != EToken::NEWLINE)
+				{
+					skip_symbol();
+				}
+				skip_symbol();
+			};
+
+
 
 			switch (token)
 			{
@@ -1056,7 +1088,8 @@ namespace header_tool
 
 					// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
 					result.push_back(Symbol(0, EToken::MOC_INCLUDE_BEGIN, include));
-					preprocess(include, symbols, result, preprocess_only);
+					assert(false);
+					//result += preprocess_internal(include, input, symbols, preprocess_only);
 					result.push_back(Symbol(lineNum, EToken::MOC_INCLUDE_END, include));
 
 					symbols = saveSymbols;
@@ -1065,78 +1098,78 @@ namespace header_tool
 				}
 				case EToken::PREPROC_DEFINE:
 				{
-					while (index < symbols.size() && symbols[index++].token != EToken::WHITESPACE);
-
+					// # define
+					skip_whitespaces();
+					// # define name
 					std::string name = symbols[index].lexem();
-
 					if (name.empty() || !is_ident_start(name[0]))
+					{
+						assert(false);
 						error(g_include_file_stack.top(), symbols[index]);
+					}
+					skip_symbol();
 
 					Macro2 macro;
 					macro.isVariadic = false;
 
-					if (index < symbols.size() && symbols[index].token == EToken::LPAREN)
+					// # define name(
+					if (symbols[index].token == EToken::LPAREN)
 					{
-						++index;
-						// we have a function macro
+						skip_symbol();
 						macro.isFunction = true;
 
 						std::vector<Symbol> arguments;
-						while (index < symbols.size())
+						int arg_count = 0;
+						int comma_count = 0;
+						while (symbols[index].token != EToken::RPAREN)
 						{
-							while (index < symbols.size() && symbols[index++].token == EToken::WHITESPACE);
+							skip_whitespaces();
 
-							EToken t = EToken::NULL_TOKEN;
-							if (index < symbols.size())
-							{
-								t = symbols[index].token;
-								index++;
-							}
+							EToken token = symbols[index].token;
 
-							if (t == EToken::RPAREN)
-								break;
-							if (t != EToken::IDENTIFIER)
+							switch (token)
 							{
-								std::string l = symbols[index].lexem();
-								if (l == "...")
+							// # define name(arg,
+							case EToken::COMMA:
+							{
+								assert(arg_count == (comma_count + 1));
+								comma_count++;
+								skip_symbol();
+							} break;
+							// # define name(arg
+							case EToken::IDENTIFIER:
+							{
+								Symbol symbol = symbols[index];
+								if (std::find(arguments.begin(), arguments.end(), symbol) != arguments.end())
 								{
-									macro.isVariadic = true;
-									arguments.push_back(Symbol(symbols[index].line_num, EToken::IDENTIFIER, "__VA_ARGS__"));
-									while (index < symbols.size() && symbols[index++].token == EToken::WHITESPACE);
-
-									if (!(index < symbols.size() && symbols[index].token == EToken::RPAREN))
-									{
-										error(g_include_file_stack.top(), symbols[index].line_num, "missing ')' in macro argument list");
-									}
-									break;
+									error(g_include_file_stack.top(), symbols[index].line_num, "Duplicate macro parameter.");
 								}
-								else if (!is_identifier(l.data(), l.length()))
+								assert(comma_count == arg_count);
+								arguments.push_back(symbols[index]);
+								skip_symbol();
+							} break;
+							// # define name(arg...
+							case EToken::ELIPSIS:
+							{
+								macro.isVariadic = true;
+								arguments.emplace_back(symbols[index].line_num, EToken::IDENTIFIER, "__VA_ARGS__");
+								skip_whitespaces();
+								// ... must be the last argument
+								if (symbols[index].token != EToken::RPAREN)
+								{
+									error(g_include_file_stack.top(), symbols[index].line_num, "missing ')' in macro argument list");
+								}
+							}break;
+							default:
+							{
+								assert(false);
+								if (!is_identifier(lexem.data(), lexem.length()))
 								{
 									error(g_include_file_stack.top(), symbols[index].line_num, "Unexpected character in macro argument list.");
 								}
+							} break;
 							}
-
-							Symbol arg = symbols[index];
-							if (std::find(arguments.begin(), arguments.end(), arg) != arguments.end())
-								error(g_include_file_stack.top(), symbols[index].line_num, "Duplicate macro parameter.");
-							arguments.push_back(symbols[index]);
-
-							while (index < symbols.size() && symbols[index++].token == EToken::WHITESPACE);
-
-							if (index < symbols.size())
-							{
-								t = symbols[index].token;
-								index++;
-							}
-							else
-							{
-								t = EToken::NULL_TOKEN;
-							}
-
-							if (t == EToken::RPAREN)
-								break;
-							if (t == EToken::COMMA)
-								continue;
+							/*
 							if (symbols[index].lexem() == "...")
 							{
 								//GCC extension:    #define FOO(x, y...) x(y)
@@ -1147,79 +1180,110 @@ namespace header_tool
 									error(g_include_file_stack.top(), symbols[index].line_num, "missing ')' in macro argument list.");
 								break;
 							}
-							error(g_include_file_stack.top(), symbols[index].line_num, "Unexpected character in macro argument list.");
+							*/
 						}
 						macro.arguments = arguments;
-						while (index < symbols.size() && symbols[index++].token == EToken::WHITESPACE);
+						skip_whitespaces();
 					}
 					else
 					{
 						macro.isFunction = false;
 					}
 
-					uint64 start = index;
-					while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
-					macro.symbols.reserve(index - start - 1);
+					skip_whitespaces();
+
+					// # define name(...) expression
+					// # define name expression
+					uint64 rewind = index;
+					do 
+					{
+						skip_line();
+					} while (symbols[index - 2].token == EToken::BACKSLASH);
+					uint64 end = index;
+					index = rewind;
+					macro.symbols.reserve(end - index - 1);
 
 					// remove whitespace where there shouldn't be any:
-					// Before and after the macro, after a # and around ##
-					EToken lastToken = EToken::PREPROC_HASH; // skip whitespace at the beginning
-					for (uint64 i = start; i < index - 1; ++i)
+					// after the macro, after a #, and around ##
+					while (index < (end - 1))
 					{
-						EToken token = symbols[i].token;
-						if (token == EToken::WHITESPACE)
-						{										// TODO:
-							if (lastToken == EToken::PREPROC_HASH || // lastToken == HASH ||
-								lastToken == EToken::PREPROC_HASHHASH ||
-								lastToken == EToken::WHITESPACE || lastToken == EToken::WHITESPACE)
-								continue;
-						}
-						else if (token == EToken::PREPROC_HASHHASH)
+						EToken token = symbols[index].token;
+						switch (token)
 						{
-							if (!macro.symbols.empty() &&
-								(lastToken == EToken::WHITESPACE || lastToken == EToken::WHITESPACE))
+						case EToken::PREPROC_HASH:
+						{
+							macro.symbols.push_back(symbols[index]);
+							skip_whitespaces();
+						} break;
+						case EToken::PREPROC_HASHHASH:
+						case EToken::BACKSLASH:
+						case EToken::NEWLINE:
+						{
+							while (!macro.symbols.empty()
+								&& (macro.symbols.back().token != EToken::WHITESPACE
+									|| macro.symbols.back().token != EToken::WHITESPACE_ALIAS))
+							{
 								macro.symbols.pop_back();
+							}
+							macro.symbols.push_back(symbols[index]);
+							if (token == EToken::PREPROC_HASHHASH)
+							{
+								skip_whitespaces();
+							}
+						} break;
+						default:
+							macro.symbols.push_back(symbols[index]);
+							break;
 						}
-						macro.symbols.push_back(symbols[i]);
-						lastToken = token;
-					}
-					// remove trailing whitespace
-					while (!macro.symbols.empty() &&
-						(macro.symbols.back().token == EToken::WHITESPACE || macro.symbols.back().token == EToken::WHITESPACE))
-						macro.symbols.pop_back();
 
+						skip_symbol();
+					}
+
+					/*
+					// remove trailing whitespace
+					//while (!macro.symbols.empty() &&
+					//	(macro.symbols.back().token == EToken::WHITESPACE || macro.symbols.back().token == EToken::WHITESPACE_ALIAS))
+					//	macro.symbols.pop_back();
+
+					// Do we need this?
 					if (!macro.symbols.empty())
 					{
 						if (macro.symbols.front().token == EToken::PREPROC_HASHHASH ||
 							macro.symbols.back().token == EToken::PREPROC_HASHHASH)
 						{
-							error(g_include_file_stack.top(), symbols[index].line_num, "'##' cannot appear at either end of a macro expansion.");
+							error(g_include_file_stack.top(), symbols[index].line_num, "'##' cannot appear at either end of a macro expression.");
 						}
 					}
+					*/
 					g_macros.insert_or_assign(name, macro);
 					continue;
-				}
+				} break;
 				case EToken::PREPROC_UNDEF:
 				{
-					while (index < symbols.size() && symbols[index++].token != EToken::WHITESPACE);
+					skip_whitespaces();
 					std::string name = symbols[index].lexem();
 					g_macros.erase(name);
 
-					while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
+					// is it ok to ignore the rest of the line?
+					//assert(false);
+					skip_line();
 
 					continue;
-				}
+				} break;
 				case EToken::IDENTIFIER:
 				{
-					expand_macro(result, symbols, index, symbol.line_num, true);
+					expand_macro(result, symbols[index], symbol.line_num);
+					index++;
 					continue;
 				}
+				/*
 				case EToken::PREPROC_HASH:
 				{
 
-					while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
-					continue; // skip unknown preprocessor statement
+					//while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
+					//continue; // skip unknown preprocessor statement
 				}
+				*/
 				case EToken::PREPROC_IFDEF:
 				case EToken::PREPROC_IFNDEF:
 				case EToken::PREPROC_IF:
@@ -1239,7 +1303,7 @@ namespace header_tool
 
 							if (token == EToken::IDENTIFIER)
 							{
-								expand_macro(expression_symbols, symbols, index, symbols[index].line_num, true);
+								expand_macro(expression_symbols, symbols[index], symbols[index].line_num);
 							}
 							else if (token == EToken::PREPROC_DEFINED)
 							{
@@ -1353,9 +1417,11 @@ namespace header_tool
 				case EToken::PREPROC_ENDIF:
 					while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
 					continue;
+				case EToken::PREPROC_HASH:
 				case EToken::NEWLINE:
 					index++;
 					continue;
+				/*
 				case EToken::SIGNALS:
 				case EToken::SLOTS:
 				{
@@ -1366,6 +1432,7 @@ namespace header_tool
 						sym.token = (token == EToken::SIGNALS ? EToken::Q_SIGNALS_TOKEN : EToken::Q_SLOTS_TOKEN);
 					result.push_back(sym);
 				} continue;
+				*/
 				default:
 					break;
 			}
@@ -1374,10 +1441,12 @@ namespace header_tool
 		}
 
 		g_include_file_stack.pop();
+
+		return result;
 	}
 
 
-	inline std::vector<Symbol> preprocess(const std::string &filename, FILE*& device, std::vector<Symbol>& symbols, bool preprocess_only)
+	inline std::vector<Symbol> preprocess(const std::string &filename, std::string& input, std::vector<Symbol>& symbols, bool preprocess_only)
 	{
 		#if 0
 		for (int j = 0; j < symbols.size(); ++j)
@@ -1387,20 +1456,11 @@ namespace header_tool
 				tokenTypeName(symbols[j].token));
 		#endif
 
-		// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
-		std::vector<Symbol> result;
-		// Preallocate some space to speed up the code below.
-		// The magic value was found by logging the final size
-		// and calculating an average when running moc over FOSS projects.
-		std::ifstream ifs(device);
-		ifs.seekg(0, ifs.end);
-		uint64 length = ifs.tellg();
-		ifs.seekg(0, ifs.beg);
-		result.reserve(length / 300000);
 
-		preprocess(filename, symbols, result, preprocess_only);
 
-		merge_string_literals(&result);
+		return preprocess_internal(filename, input, symbols, preprocess_only);
+
+		//merge_string_literals(&result);
 
 		#if 0
 		for (int j = 0; j < result.size(); ++j)
@@ -1410,7 +1470,7 @@ namespace header_tool
 				tokenTypeName(result[j].token));
 		#endif
 
-		return result;
+		//return result;
 	}
 
 
