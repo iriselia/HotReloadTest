@@ -1,6 +1,9 @@
 
 
 
+
+
+
 int iphone = (1 + (2 + 3)) + (1 + (2 + 3));
 //123
 //#if wefwef
@@ -9,15 +12,15 @@ int iphone = (1 + (2 + 3)) + (1 + (2 + 3));
 //#elif !defined wefwef
 //#if !defined wefwef
 
-int i = wefwef;      
+int i = wefwef;
 
+   
 
+ 
 
+ 
 
-
-
-
-
+ 
 
 
 //# define name int a = 3;
@@ -29,5 +32,7 @@ int i = wefwef;
 //#include <gfx_d3d/r_shader_resources.h"
 
 int wefwef()
-{  
-return 0;
+{
+  return 0;
+}
+

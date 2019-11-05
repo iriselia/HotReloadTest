@@ -23,6 +23,7 @@
 
 	// Include miscellaneous tokens that aren't keywords
 	INCLUDE_TOKEN(CHARACTER)
+	INCLUDE_TOKEN(STRING)
 	INCLUDE_TOKEN(IDENTIFIER)
 	INCLUDE_TOKEN(DIGIT)
 

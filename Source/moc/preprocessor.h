@@ -32,6 +32,7 @@ namespace header_tool
 	};
 
 	std::stack<std::string, std::vector<std::string>> g_include_file_stack;
+	std::unordered_map<std::string, std::string> g_source_file_atlas;
 	std::set<std::string> g_preprocessedIncludes;
 	std::unordered_map<std::string, Macro2> g_macros;
 	std::unordered_map<std::string, std::string> g_nonlocalIncludePathResolutionCache;
@@ -51,7 +52,7 @@ namespace header_tool
 
 	void error(const std::string& filename, const Symbol& symbol)
 	{
-		fprintf(stderr, ErrorFormatString "Parse error at \"%s\"\n", filename.c_str(), symbol.line_num, symbol.lexem().data());
+		fprintf(stderr, ErrorFormatString "Parse error at \"%s\"\n", filename.c_str(), symbol.line_num, symbol.string().data());
 		exit(EXIT_FAILURE);
 	}
 
@@ -181,15 +182,15 @@ namespace header_tool
 				}
 
 				const std::vector<Symbol> &arg = arguments.at(index);
-				std::string stringified;
+				std::string& stringified = *new std::string;
 				for (int i = 0; i < arg.size(); ++i)
 				{
-					stringified += arg.at(i).lexem();
+					stringified += arg.at(i).string();
 				}
 				replace_all(stringified, R"(")", R"(\")");
 				stringified.insert(0, 1, '"');
 				stringified.insert(stringified.end(), 1, '"');
-				expansion.push_back(Symbol(lineNum, EToken::STRING_LITERAL, stringified));
+				expansion.push_back(Symbol(lineNum, EToken::STRING_LITERAL, &stringified));
 			}
 			else if (mode == HashHash)
 			{
@@ -217,8 +218,9 @@ namespace header_tool
 					Symbol last = expansion.back();
 					expansion.pop_back();
 
-					std::string lexem = last.lexem() + next.lexem();
-					expansion.push_back(Symbol(lineNum, last.token, lexem));
+					std::string& lexem = *new std::string;
+					lexem = last.string() + next.string();
+					expansion.push_back(Symbol(lineNum, last.token, &lexem));
 				}
 				else
 				{
@@ -253,7 +255,7 @@ namespace header_tool
 			bool skip_replace = false;
 			for (int i = 0; i < symbolstack.size(); ++i)
 			{
-				if (symbol.lexem() == symbolstack[i].expandedMacro || (symbolstack[i].excludedSymbols.find(symbol.lexem()) != symbolstack[i].excludedSymbols.end()))
+				if (symbol.string() == symbolstack[i].expandedMacro || (symbolstack[i].excludedSymbols.find(symbol.string()) != symbolstack[i].excludedSymbols.end()))
 				{
 					skip_replace = true;
 				}
@@ -266,20 +268,20 @@ namespace header_tool
 		{
 			if (symbolstack.size() > 0)
 			{
-				symbol = symbolstack.back().symbols[symbolstack.back().index];
+				symbol = std::move(symbolstack.back().symbols[symbolstack.back().index]);
 			}
 
-			auto macro_itr = g_macros.find(symbol.lexem());
+			auto macro_itr = g_macros.find(symbol.string());
 
 			if (symbol.token != EToken::IDENTIFIER || macro_itr == g_macros.end() || skip_replace())
 			{
 				if (symbolstack.size() > 0)
 				{
-					symbol = symbolstack.back().symbols[symbolstack.back().index];
+					symbol = std::move(symbolstack.back().symbols[symbolstack.back().index]);
 					symbol.line_num = lineNum;
 					symbolstack.back().index++;
 				}
-				into.push_back(symbol);
+				into.push_back(std::move(symbol));
 			}
 			else
 			{
@@ -292,7 +294,7 @@ namespace header_tool
 				}
 				else
 				{
-					newSyms = expand_function_macro(symbol, symbolstack, lineNum, &macro);
+					newSyms = std::move(expand_function_macro(symbol, symbolstack, lineNum, &macro));
 				}
 
 				if (symbolstack.size() > 0)
@@ -303,8 +305,8 @@ namespace header_tool
 				SafeSymbols sf;
 				sf.symbols = newSyms;
 				sf.index = 0;
-				sf.expandedMacro = symbol.lexem();
-				symbolstack.push_back(sf);
+				sf.expandedMacro = symbol.string();
+				symbolstack.push_back(std::move(sf));
 				continue;
 			}
 
@@ -323,28 +325,29 @@ namespace header_tool
 
 	inline static void merge_string_literals(std::vector<Symbol> *_symbols)
 	{
+		/*
 		std::vector<Symbol>& symbols = *_symbols;
 		for (std::vector<Symbol>::iterator i = symbols.begin(); i != symbols.end(); ++i)
 		{
 			if (i->token == EToken::STRING_LITERAL)
 			{
 				std::vector<Symbol>::iterator mergeSymbol = i;
-				uint64 literalsLength = mergeSymbol->len;
+				uint64 literalsLength = mergeSymbol->size;
 				while (++i != symbols.end() && i->token == EToken::STRING_LITERAL)
-					literalsLength += i->len - 2; // no quotes
+					literalsLength += i->size - 2; // no quotes
 
-				if (literalsLength != mergeSymbol->len)
+				if (literalsLength != mergeSymbol->size)
 				{
 					std::string mergeSymbolOriginalLexem = mergeSymbol->unquotedLexem();
-					std::string &mergeSymbolLexem = mergeSymbol->lex;
+					std::string &mergeSymbolLexem = mergeSymbol->string();
 					mergeSymbolLexem.resize(0);
 					mergeSymbolLexem.reserve(literalsLength);
 					mergeSymbolLexem.push_back('"');
 					mergeSymbolLexem.append(mergeSymbolOriginalLexem);
 					for (std::vector<Symbol>::const_iterator j = mergeSymbol + 1; j != i; ++j)
-						mergeSymbolLexem.append(j->lex.data() + j->from + 1, j->len - 2); // append j->unquotedLexem()
+						mergeSymbolLexem.append(j->lexem.data() + j->from + 1, j->size - 2); // append j->unquotedLexem()
 					mergeSymbolLexem.push_back('"');
-					mergeSymbol->len = mergeSymbol->lex.length();
+					mergeSymbol->size = mergeSymbol->lexem.length();
 					mergeSymbol->from = 0;
 					i = symbols.erase(mergeSymbol + 1, i);
 				}
@@ -352,6 +355,7 @@ namespace header_tool
 					break;
 			}
 		}
+		*/
 	}
 
 	inline static std::string searchIncludePaths(const std::vector<IncludePath> &includepaths,
@@ -392,13 +396,25 @@ namespace header_tool
 
 	inline static std::string resolveInclude(const std::string &include, const std::string &relativeTo)
 	{
+		/*
+		std::filesystem::path file_path = include;
+		if (file_path.is_relative())
+		{
+			file_path = std::filesystem::current_path() / include;
+		}
+
+		if (std::filesystem::exists(file_path) && std::filesystem::is_directory(file_path))
+			return file_path.string();
+		*/
+
 		if (!relativeTo.empty())
 		{
-			std::filesystem::path fi;
-			fi = relativeTo;
-			fi /= include;
-			if (std::filesystem::exists(fi) && std::filesystem::is_directory(fi))
-				return fi.string();
+			std::filesystem::path file_path;
+			file_path = relativeTo;
+			file_path = file_path.parent_path();
+			file_path /= include;
+			if (std::filesystem::exists(file_path) && std::filesystem::is_regular_file(file_path))
+				return file_path.string();
 		}
 
 		auto it = g_nonlocalIncludePathResolutionCache.find(include);
@@ -460,7 +476,7 @@ namespace header_tool
 				}
 				else
 				{
-					return_value = std::stoi(symbols[index].lexem());
+					return_value = std::stoi(symbols[index].string());
 					if (index < symbols.size())
 					{
 						index++;
@@ -813,7 +829,7 @@ namespace header_tool
 					{
 						index++;
 					}
-					return_value = std::stoi(symbols[index - 1].lexem());
+					return_value = std::stoi(symbols[index - 1].string());
 					// TODO
 					//value = lexem().toInt(0, 0);
 				}
@@ -964,7 +980,7 @@ namespace header_tool
 	}
 	*/
 
-	inline std::vector<Symbol> preprocess_internal(const std::string &filename, std::string& input, std::vector<Symbol>& symbols, bool preprocess_only)
+	inline std::vector<Symbol> preprocess_internal(const std::string &filename, const std::string& input, const std::vector<Symbol>& symbols, bool preprocess_only)
 	{
 		// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
 		std::vector<Symbol> result;
@@ -978,8 +994,8 @@ namespace header_tool
 		uint64 index = 0;
 		while (index < symbols.size())
 		{
-			Symbol& symbol = symbols[index];
-			std::string lexem = symbol.lexem();
+			const Symbol& symbol = symbols[index];
+			std::string lexem = symbol.string();
 			EToken token = symbol.token;
 
 			auto skip_symbol = [&]()
@@ -990,25 +1006,26 @@ namespace header_tool
 				}
 				else
 				{
-					assert(false);
+					return false;
 				}
+				return true;
 			};
 
 			auto skip_whitespaces = [&]()
 			{
 				while (symbols[index].token != EToken::WHITESPACE
-					&& symbols[index].token != EToken::WHITESPACE_ALIAS)
+					&& symbols[index].token != EToken::WHITESPACE_ALIAS
+					&& skip_symbol())
 				{
-					skip_symbol();
 				}
 				skip_symbol();
 			};
 
 			auto skip_line = [&]()
 			{
-				while (symbols[index].token != EToken::NEWLINE)
+				while (symbols[index].token != EToken::NEWLINE
+					&& skip_symbol())
 				{
-					skip_symbol();
 				}
 				skip_symbol();
 			};
@@ -1020,83 +1037,110 @@ namespace header_tool
 				case EToken::PREPROC_INCLUDE:
 				{
 					uint64 lineNum = symbol.line_num;
-					std::string include;
+					std::string include_file;
 					bool local = false;
 
-					if (index < symbols.size() && symbols.at(index).token == EToken::STRING_LITERAL)
+					skip_whitespaces();
+
+					if (symbols[index].token == EToken::STRING_LITERAL)
 					{
-						index++;
-						// TODO
-						local = lexem[0] == '\"'; // same as '"'
-						include = symbols.at(index - 1).unquotedLexem();
+						local = symbols[index].string()[0] == '\"';
+						include_file = symbols[index].unquotedLexem();
+						skip_symbol();
 					}
 					else
+					{
+						assert(false);
 						continue;
+					}
 
-					while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
+					skip_line();
 
-					include = resolveInclude(include, local ? filename : std::string());
-					if (include.empty())
+					if (!filename.empty())
+					{
+						std::filesystem::path file_path;
+						file_path = filename;
+						file_path = file_path.parent_path();
+						file_path /= include_file;
+						if (std::filesystem::exists(file_path) && std::filesystem::is_regular_file(file_path))
+						{
+							include_file = file_path.string();
+						}
+						else
+						{
+							assert(false);
+						}
+					}
+
+					auto it = g_nonlocalIncludePathResolutionCache.find(include_file);
+					if (it == g_nonlocalIncludePathResolutionCache.end())
+					{
+						it = g_nonlocalIncludePathResolutionCache.insert_or_assign(it, include_file, searchIncludePaths(includes, include_file));
+						//it = nonlocalIncludePathResolutionCache.insert(include, searchIncludePaths(includes, include));
+					}
+					include_file = it->second;
+
+					if (include_file.empty())
+					{
 						continue;
+					}
 
-					if (g_preprocessedIncludes.find(include) != g_preprocessedIncludes.end())
+					if (g_preprocessedIncludes.find(include_file) != g_preprocessedIncludes.end())
+					{
 						continue;
+					}
 
-					g_preprocessedIncludes.insert(include);
+					g_preprocessedIncludes.insert(include_file);
 
-					std::vector<Symbol> saveSymbols = symbols;
+					//std::vector<Symbol> saveSymbols = symbols;
 					uint64 saveIndex = index;
 
 					std::string input;
 					{
 						std::ifstream ifs;
-						ifs.open(include, std::iostream::binary);
-						if (ifs.is_open())
+						ifs.open(include_file, std::iostream::binary);
+						if (!ifs.is_open())
 						{
-							ifs.seekg(0, ifs.end);
-							uint64 size = ifs.tellg();
-							ifs.seekg(0, ifs.beg);
-
-							if (size == 0)
-							{
-								fprintf(stderr, "moc: %s: File Size is 0\n", include.c_str());
-							}
-
-							input.resize(size);
-
-							if (input.capacity() >= size)
-							{
-								ifs.read(&input.front(), size);
-							}
-						}
-						else
-						{
-							fprintf(stderr, "moc: %s: No such file\n", include.c_str());
+							fprintf(stderr, "moc: %s: No such file\n", include_file.c_str());
 							continue;
 						}
+						ifs.seekg(0, ifs.end);
+						uint64 size = ifs.tellg();
+						ifs.seekg(0, ifs.beg);
+
+						if (size == 0)
+						{
+							fprintf(stderr, "moc: %s: File Size is 0\n", include_file.c_str());
+						}
+
+						input.resize(size);
+						ifs.read(&input.front(), size);
 					}
 
+					auto source_itr = g_source_file_atlas.emplace(include_file, std::move(input)).first;
+					auto& source_name = source_itr->first;
+					auto& source = source_itr->second;
 					auto include_symbols = tokenize(input, preprocess_only);
 
 					if (!include_symbols.empty())
 					{
-						symbols = include_symbols;
+						const std::vector<Symbol>& preprocessed_symbols = preprocess_internal(include_file, input, include_symbols, preprocess_only);
+						result.push_back(Symbol(0, EToken::MOC_INCLUDE_BEGIN, &source_name));
+						result.reserve(result.size() + preprocessed_symbols.size());
+						std::move(std::begin(preprocessed_symbols), std::end(preprocessed_symbols), std::back_inserter(result));
+						result.push_back(Symbol(lineNum, EToken::MOC_INCLUDE_END, &source_name));
 					}
 					else
 					{
 						continue;
 					}
 
-					index = 0;
+					//index = 0;
 
-					// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
-					result.push_back(Symbol(0, EToken::MOC_INCLUDE_BEGIN, include));
-					assert(false);
-					//result += preprocess_internal(include, input, symbols, preprocess_only);
-					result.push_back(Symbol(lineNum, EToken::MOC_INCLUDE_END, include));
 
-					symbols = saveSymbols;
-					index = saveIndex;
+
+					//symbols = saveSymbols;
+					//index = saveIndex;
 					continue;
 				}
 				case EToken::PREPROC_DEFINE:
@@ -1104,7 +1148,7 @@ namespace header_tool
 					// # define
 					skip_whitespaces();
 					// # define name
-					std::string name = symbols[index].lexem();
+					std::string name = symbols[index].string();
 					if (name.empty() || !is_ident_start(name[0]))
 					{
 						assert(false);
@@ -1155,7 +1199,7 @@ namespace header_tool
 							case EToken::ELIPSIS:
 							{
 								macro.isVariadic = true;
-								arguments.emplace_back(symbols[index].line_num, EToken::IDENTIFIER, "__VA_ARGS__");
+								arguments.emplace_back(symbols[index].line_num, EToken::IDENTIFIER, new std::string("__VA_ARGS__"));
 								skip_whitespaces();
 								// ... must be the last argument
 								if (symbols[index].token != EToken::RPAREN)
@@ -1264,7 +1308,7 @@ namespace header_tool
 				case EToken::PREPROC_UNDEF:
 				{
 					skip_whitespaces();
-					std::string name = symbols[index].lexem();
+					std::string name = symbols[index].string();
 					g_macros.erase(name);
 
 					// is it ok to ignore the rest of the line?
@@ -1278,15 +1322,7 @@ namespace header_tool
 					expand_macro(result, symbols[index], symbol.line_num);
 					index++;
 					continue;
-				}
-				/*
-				case EToken::PREPROC_HASH:
-				{
-
-					//while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
-					//continue; // skip unknown preprocessor statement
-				}
-				*/
+				} break;
 				case EToken::PREPROC_IFDEF:
 				case EToken::PREPROC_IFNDEF:
 				case EToken::PREPROC_IF:
@@ -1328,7 +1364,7 @@ namespace header_tool
 								}
 
 								Symbol if_defined_lookup = symbols[index];
-								if_defined_lookup.token = g_macros.find(if_defined_lookup.lex) != g_macros.end() ? EToken::MOC_TRUE : EToken::MOC_FALSE;
+								if_defined_lookup.token = g_macros.find(if_defined_lookup.string()) != g_macros.end() ? EToken::MOC_TRUE : EToken::MOC_FALSE;
 								expression_symbols.push_back(if_defined_lookup);
 								if (braces)
 								{
@@ -1418,12 +1454,13 @@ namespace header_tool
 					[[fallthrough]];
 				}
 				case EToken::PREPROC_ENDIF:
-					while (index < symbols.size() && symbols[index++].token != EToken::NEWLINE);
+					skip_line();
 					continue;
 				case EToken::PREPROC_HASH:
-				case EToken::NEWLINE:
-					index++;
+					skip_symbol();
 					continue;
+				case EToken::NEWLINE:
+					break;
 				/*
 				case EToken::SIGNALS:
 				case EToken::SLOTS:
@@ -1439,7 +1476,7 @@ namespace header_tool
 				default:
 					break;
 			}
-			result.push_back(symbol);
+			result.push_back(std::move(symbol));
 			index++;
 		}
 

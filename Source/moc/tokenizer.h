@@ -195,7 +195,7 @@ namespace header_tool
 		{
 		case TokenizeMode::Cpp:
 		{
-			if (state->token != EToken::CHARACTER)
+			if (state->token != EToken::CHARACTER && state->token != EToken::STRING)
 			{
 				return state->token;
 			}
@@ -221,12 +221,9 @@ namespace header_tool
 		return state->token;
 	}
 
-	inline std::vector<Symbol> tokenize_internal(std::string& input, bool preprocess = false)
+	inline std::vector<Symbol> tokenize_internal(const std::string& input, bool preprocess = false)
 	{
-		if (input.empty())
-			return std::vector<Symbol>();
 
-		input = trim_source(input);
 
 		const char* begin = input.data();
 		const char* data = input.data();
@@ -253,7 +250,7 @@ namespace header_tool
 			auto push_symbol = [&](EToken token)
 			{
 				assert((data - lexem) > 0);
-				symbols.emplace_back(line_num, token, input, lexem - begin, data - lexem);
+				symbols.emplace_back(line_num, token, lexem, data - lexem);
 				column++;
 				lexem = data;
 				return token;
@@ -291,7 +288,7 @@ namespace header_tool
 					skip_character();
 					column++;
 					assert((data - lexem) > 0);
-					symbols.emplace_back(line_num, *data == ' ' ? EToken::WHITESPACE : EToken::WHITESPACE_ALIAS, input, lexem - begin, data - lexem);
+					symbols.emplace_back(line_num, *data == ' ' ? EToken::WHITESPACE : EToken::WHITESPACE_ALIAS, lexem, data - lexem);
 					lexem = data;
 					count++;
 				}
@@ -378,16 +375,17 @@ namespace header_tool
 					// # include
 					push_whitespaces();
 					// " or <
-					token = push_symbol(next_token(TokenizeMode::PreprocKeyword, data));
+					token = next_token(TokenizeMode::PreprocKeyword, data);
 					assert(token == EToken::QUOTE || token == EToken::LANGLE);
 					while (*data != '\n' && *data != '>' && *data != '"')
 					{
 						skip_character();
 					}
-					push_symbol(EToken::STRING_LITERAL);
 					// " or >
-					token = push_symbol(next_token(TokenizeMode::PreprocKeyword, data));
+					token = next_token(TokenizeMode::PreprocKeyword, data);
 					assert(token == EToken::QUOTE || token == EToken::RANGLE);
+					push_symbol(EToken::STRING_LITERAL);
+
 					break;
 				} break;
 				case EToken::PREPROC_ERROR:
@@ -593,6 +591,11 @@ namespace header_tool
 
 	inline std::vector<Symbol> tokenize(std::string& input, bool preprocess = false)
 	{
+		if (input.empty())
+			return std::vector<Symbol>();
+
+		input = trim_source(input);
+
 		return tokenize_internal(input, preprocess);
 	}
 } // namespace header_tool

@@ -320,7 +320,7 @@ Meta Object Compiler.
 		int index = 0;
 		while (index < symbols.size() - 1)
 		{
-			Symbol sym = symbols[index++];
+			Symbol sym = symbols[index];
 			switch (sym.token)
 			{
 			case EToken::NEWLINE:
@@ -332,24 +332,27 @@ Meta Object Compiler.
 				{
 
 				}
+				index++;
 				continue;
 			case EToken::WHITESPACE:
 				secondlast = last;
 				last = EToken::WHITESPACE;
-				output += sym.lex[sym.from];
+				output += sym.string()[0];// sym.from];
 				if (last != EToken::WHITESPACE)
 				{
 
 				}
+				index++;
 				continue;
 			case EToken::WHITESPACE_ALIAS:
 				secondlast = last;
 				last = EToken::WHITESPACE_ALIAS;
-				output += sym.lex[sym.from];
+				output += sym.string()[0];// sym.from];
 				if (last != EToken::WHITESPACE_ALIAS)
 				{
 
 				}
+				index++;
 				continue;
 			case EToken::STRING_LITERAL:
 				if (last == EToken::STRING_LITERAL)
@@ -358,21 +361,25 @@ Meta Object Compiler.
 					output.erase(output.length() - 2);
 				else
 					break;
-				output += subset(sym.lexem(), 1);
+				output += subset(sym.string(), 1);
 				secondlast = last;
 				last = EToken::STRING_LITERAL;
+				index++;
 				continue;
 			case EToken::MOC_INCLUDE_BEGIN:
-				lineNum = 0;
+				//lineNum = 0;
+				index++;
 				continue;
 			case EToken::MOC_INCLUDE_END:
-				lineNum = sym.line_num;
+				//lineNum = sym.line_num;
+				index++;
 				continue;
 			default:
 				break;
 			}
 			secondlast = last;
 			last = sym.token;
+			index++;
 
 			const int64 padding = sym.line_num - lineNum;
 			if (padding > 0)
@@ -382,7 +389,7 @@ Meta Object Compiler.
 				lineNum = sym.line_num;
 			}
 
-			output += sym.lexem();
+			output += sym.string();
 		}
 
 		return output;
@@ -416,31 +423,25 @@ Meta Object Compiler.
 
 			std::ifstream ifs;
 			ifs.open(moc.filename, std::iostream::binary);
-			if (ifs.is_open())
-			{
-				ifs.seekg(0, ifs.end);
-				uint64 size = ifs.tellg();
-				ifs.seekg(0, ifs.beg);
-
-				if (size == 0)
-				{
-					fprintf(stderr, "moc: %s: File Size is 0\n", args.headerFile.c_str());
-				}
-
-				input.resize(size);
-
-				if (input.capacity() >= size)
-				{
-					ifs.read(&input.front(), size);
-				}
-			}
-			else
+			if (!ifs.is_open())
 			{
 				fprintf(stderr, "moc: %s: No such file\n", args.headerFile.c_str());
 				return 1;
 			}
+			ifs.seekg(0, ifs.end);
+			uint64 size = ifs.tellg();
+			ifs.seekg(0, ifs.beg);
+
+			if (size == 0)
+			{
+				fprintf(stderr, "moc: %s: File Size is 0\n", args.headerFile.c_str());
+			}
+
+			input.resize(size);
+			ifs.read(&input.front(), size);
 		}
 
+		/*
 		for (const std::string &includeName : args.includes)
 		{
 			std::string rawName = resolveInclude(includeName, moc.filename);
@@ -454,27 +455,27 @@ Meta Object Compiler.
 				FILE* f = fopen(rawName.c_str(), "w");
 				if (f)
 				{
-					moc.symbols.emplace_back(0, EToken::MOC_INCLUDE_BEGIN, rawName);
+					moc.symbols.emplace_back(0, EToken::MOC_INCLUDE_BEGIN, new std::string(rawName));
 					auto symbols = tokenize(input, args.expandOnly);
 					auto temp = std::vector<Symbol>();// (rawName, f, symbols, args.expandOnly);
 					moc.symbols.insert(moc.symbols.end(), temp.begin(), temp.end());
-					moc.symbols.emplace_back(0, EToken::MOC_INCLUDE_END, rawName);
+					moc.symbols.emplace_back(0, EToken::MOC_INCLUDE_END, new std::string(rawName));
 				}
 				else
 				{
 					fprintf(stderr, "Warning: Cannot open %s included by moc file %s: %s\n",
 						rawName.data(),
 						moc.filename.empty() ? "<standard input>" : moc.filename.data(), "error"
-					/*f.errorString().toLocal8Bit().constData()*/);
+					/*f.errorString().toLocal8Bit().constData()*//*);
 				}
 			}
 		}
-
+		*/
 		std::vector<Symbol> symbols;
 
-
-		symbols = tokenize(input, args.expandOnly);
-		symbols = preprocess(moc.filename, input, symbols, args.expandOnly);
+		auto& source = g_source_file_atlas.emplace(args.headerFile, std::move(input)).first->second;
+		symbols = tokenize(source, args.expandOnly);
+		symbols = preprocess(args.headerFile, source, symbols, args.expandOnly);
 
 		if (!args.expandOnly)
 		{

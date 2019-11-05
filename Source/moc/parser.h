@@ -58,7 +58,7 @@ namespace header_tool
 		}
 		inline std::string lexem()
 		{
-			return symbols.at(index - 1).lexem();
+			return symbols.at(index - 1).string();
 		}
 		inline std::string unquotedLexem()
 		{

@@ -134,7 +134,7 @@ void SingleCharState(std::vector<State> &states, const char* token_name, char le
 	}
 }
 
-void MultiCharState(std::vector<State>& states, const char* lexem, const char* token)
+void MultiCharState(std::vector<State>& states, const char* lexem, const char* final_token)
 {
 	auto isIdentifierChar = [](char s)
 	{
@@ -146,9 +146,18 @@ void MultiCharState(std::vector<State>& states, const char* lexem, const char* t
 			(s == '$'));
 	};
 
-	const char* identifier = 0;
+	bool isIdentifier;
+	const char* intermediateToken;
 	if (isIdentifierStartChar(*lexem))
-		identifier = "IDENTIFIER";
+	{
+		isIdentifier = true;
+		intermediateToken = "STRING";
+	}
+	else
+	{
+		isIdentifier = false;
+		intermediateToken = "INCOMPLETE";
+	}
 	//else if (*lexem == '#')
 	//	identifier = pre ? "PP_HASH" : "HASH";
 
@@ -159,31 +168,22 @@ void MultiCharState(std::vector<State>& states, const char* lexem, const char* t
 
 		if (states[state_index].nextStateIndex(*lexem) == -1)
 		{
-			const char * intermediateToken = 0;
-			if (identifier)
-			{
-				intermediateToken = identifier;
-			}
-			else
-			{
-				intermediateToken = "INCOMPLETE";
-			}
-
 			auto& next_state = states.emplace_back(intermediateToken);
-			next_state.identifier = identifier;
+			next_state.identifier = isIdentifier? "IDENTIFIER" : 0;
 			next_state.lexem = states[state_index].lexem + *lexem;
 			states[state_index].nextStateIndex(*lexem) = (int)states.size() - 1;
 		}
 		state_index = states[state_index].nextStateIndex(*lexem);
 		++lexem;
 
-		if (identifier && !isIdentifierChar(*lexem))
+		if (intermediateToken && !isIdentifierChar(*lexem))
 		{
-			identifier = 0;
+			isIdentifier = false;
+			intermediateToken = "INCOMPLETE";
 		}
 
 	}
-	states[state_index].token = token;
+	states[state_index].token = final_token;
 }
 
 void PrintTable(const RawKeyword keywords[], int count)

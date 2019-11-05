@@ -1890,7 +1890,7 @@ namespace header_tool
 		std::string s;
 		while (from <= index)
 		{
-			std::string n = symbols.at(from++ - 1).lexem();
+			std::string n = symbols.at(from++ - 1).string();
 			if (s.size() && n.size())
 			{
 				char prev = s.at(s.size() - 1);

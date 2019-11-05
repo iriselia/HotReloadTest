@@ -1,5 +1,8 @@
+#include "12.h"
 #define one 1
 #define two 2
+#define three 3
+#define four 4
 #define wefwef (one + (two + 3))
 int iphone = wefwef + wefwef;
 //123

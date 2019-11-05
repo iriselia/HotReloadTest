@@ -30,7 +30,7 @@ namespace header_tool
 				g_include_file_stack.top().c_str(), symbol().line_num, msg ? msg : error_msg);
 		else
 			fprintf(stderr, ErrorFormatString "Parse error at \"%s\"\n",
-				g_include_file_stack.top().c_str(), symbol().line_num, symbol().lexem().data());
+				g_include_file_stack.top().c_str(), symbol().line_num, symbol().string().data());
 		exit(EXIT_FAILURE);
 	}
 
