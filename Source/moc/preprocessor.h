@@ -980,6 +980,117 @@ namespace header_tool
 	}
 	*/
 
+	int lbp(EToken token)
+	{
+		int op_lbp = 0;
+		switch (token)
+		{
+			case EToken::PLUS:
+				op_lbp = 10;
+				break;
+			case EToken::STAR:
+				op_lbp = 20;
+				break;
+		}
+
+		return op_lbp;
+	};
+
+		/*
+	Expression(0)
+		4.Nud()
+		*.Led(4)
+			Expression(*.Lbp)
+				5.Nud()
+		+.Led(4*5)
+			Expression(+.Lbp)
+				3.Nud()
+
+	Expression(0)
+		4.Nud()
+		+.Led(4)
+			Expression(+.Lbp)
+				5.Nud()
+				*.Led(5)
+					Expression(*.Lbp)
+						3.Nud()
+	*/
+
+	/*
+	var expression = function (rbp) {
+		var left;
+		var t = token;
+		advance();
+		left = t.nud();
+		while (rbp < token.lbp) {
+			t = token;
+			advance();
+			left = t.led(left);
+		}
+		return left;
+	}
+	*/
+	
+
+	const std::vector<Symbol>* temp_symbols;
+	uint64* temp_index;
+
+	int nud(EToken t)
+	{
+		const std::vector<Symbol>& symbols = *temp_symbols;
+		uint64& index = *temp_index;
+
+		switch (t)
+		{
+			case EToken::NOT:
+				index++;
+				return !std::stoi(symbols[index].string());
+				break;
+			case EToken::INTEGER_LITERAL:
+				return std::stoi(symbols[index].string());
+				break;
+			default:
+				assert(false);
+				break;
+		}
+		return 4;
+	};
+
+	int expression(int rbp);
+
+	int led(EToken op, int left)
+	{
+		switch (op)
+		{
+			case EToken::PLUS:
+				return left + expression(lbp(op));
+				break;
+			case EToken::STAR:
+				return left * expression(lbp(op));
+				break;
+			default:
+				// new line
+				return left;
+				break;
+		}
+
+		return 0;
+	};
+
+	int expression(int rbp)
+	{
+		const std::vector<Symbol>& symbols = *temp_symbols;
+		uint64& index = *temp_index;
+		// 4 * 5 + 3
+		int left = nud(symbols[index].token); // 4.Nud()
+		index++;
+		while (rbp < lbp(symbols[index].token))
+		{
+			left = led(symbols[index++].token, left); // +.Led(4)
+		}
+		return left;
+	};
+
 	inline std::vector<Symbol> preprocess_internal(const std::string &filename, const std::string& input, const std::vector<Symbol>& symbols, bool preprocess_only)
 	{
 		// phase 3: preprocess conditions and substitute std::unordered_map<std::string, Macro>
@@ -1331,6 +1442,12 @@ namespace header_tool
 					uint64 end_index = 0;// find_end_of_expression(symbols, index);
 					end_index++;
 
+					skip_symbol();
+					skip_whitespaces();
+
+					temp_symbols = &symbols;
+					temp_index = &index;
+					expression(0);
 
 					auto evaluateCondition = [&](const std::vector<Symbol>& symbols, uint64& index)
 					{
