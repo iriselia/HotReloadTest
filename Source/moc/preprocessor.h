@@ -10,9 +10,9 @@
 
 namespace header_tool
 {
-	struct Macro2
+	struct Macro
 	{
-		Macro2(bool isFunction = false, bool isVariadic = false) : isFunction(isFunction), isVariadic(isVariadic)
+		Macro(bool isFunction = false, bool isVariadic = false) : isFunction(isFunction), isVariadic(isVariadic)
 		{
 		}
 		bool isFunction;
@@ -34,7 +34,7 @@ namespace header_tool
 	std::stack<std::string, std::vector<std::string>> g_include_file_stack;
 	std::unordered_map<std::string, std::string> g_source_file_atlas;
 	std::set<std::string> g_preprocessedIncludes;
-	std::unordered_map<std::string, Macro2> g_macros;
+	std::unordered_map<std::string, Macro> g_macros;
 	std::unordered_map<std::string, std::string> g_nonlocalIncludePathResolutionCache;
 	std::vector<IncludePath> includes;
 
@@ -58,7 +58,7 @@ namespace header_tool
 
 	inline static void expand_macro(std::vector<Symbol>& into, const Symbol& toExpand, uint64 lineNum, const std::set<std::string>& excludeSymbols);
 
-	inline static std::vector<Symbol> expand_function_macro(Symbol symbol, SymbolStack &symbolstack, uint64 lineNum, Macro2 macro)
+	inline static std::vector<Symbol> expand_function_macro(Symbol symbol, SymbolStack &symbolstack, uint64 lineNum, Macro macro)
 	{
 		Symbol s = symbol;
 
@@ -286,7 +286,7 @@ namespace header_tool
 			else
 			{
 				std::vector<Symbol> newSyms;
-				const Macro2& macro = (*macro_itr).second;
+				const Macro& macro = (*macro_itr).second;
 
 				if (!macro.isFunction)
 				{
@@ -547,9 +547,9 @@ namespace header_tool
 		int value = additive_expression(symbols, index);
 		switch (symbols[index++].token)
 		{
-			case EToken::LTLT:
+			case EToken::LSHIFT:
 				return value << shift_expression(symbols, index);
-			case EToken::GTGT:
+			case EToken::RSHIFT:
 				return value >> shift_expression(symbols, index);
 			default:
 				index--;
@@ -566,9 +566,9 @@ namespace header_tool
 				return value < relational_expression(symbols, index);
 			case EToken::RANGLE:
 				return value > relational_expression(symbols, index);
-			case EToken::LE:
+			case EToken::LESSEQ:
 				return value <= relational_expression(symbols, index);
-			case EToken::GE:
+			case EToken::GREATEREQ:
 				return value >= relational_expression(symbols, index);
 			default:
 				index--;
@@ -585,7 +585,7 @@ namespace header_tool
 			{
 				case EToken::EQEQ:
 					return value == equality_expression(symbols, index);
-				case EToken::NE:
+				case EToken::NOTEQ:
 					return value != equality_expression(symbols, index);
 				default:
 					index--;
@@ -784,13 +784,13 @@ namespace header_tool
 				case EToken::XOR:
 				case EToken::AND:
 				case EToken::EQEQ:
-				case EToken::NE:
+				case EToken::NOTEQ:
 				case EToken::LANGLE:
 				case EToken::RANGLE:
-				case EToken::LE:
-				case EToken::GE:
-				case EToken::LTLT:
-				case EToken::GTGT:
+				case EToken::LESSEQ:
+				case EToken::GREATEREQ:
+				case EToken::LSHIFT:
+				case EToken::RSHIFT:
 				case EToken::PLUS:
 				case EToken::MINUS:
 				case EToken::STAR:
@@ -982,18 +982,51 @@ namespace header_tool
 
 	int lbp(EToken token)
 	{
-		int op_lbp = 0;
 		switch (token)
 		{
+			case EToken::QUESTION:
+				return 1;
+			case EToken::OROR:
+			case EToken::OROR_ALIAS:
+				return 2;
+			case EToken::ANDAND:
+			case EToken::ANDAND_ALIAS:
+				return 3;
+			case EToken::OR:
+			case EToken::OR_ALIAS:
+				return 4;
+			case EToken::XOR:
+			case EToken::XOR_ALIAS:
+				return 5;
+			case EToken::AND:
+			case EToken::AND_ALIAS:
+				return 6;
+			case EToken::EQEQ:
+			case EToken::NOTEQ:
+			case EToken::NOTEQ_ALIAS:
+				return 7;
+			case EToken::LANGLE:
+			case EToken::RANGLE:
+			case EToken::LESSEQ:
+			case EToken::GREATEREQ:
+				return 8;
+			case EToken::LSHIFT:
+			case EToken::RSHIFT:
+				return 9;
 			case EToken::PLUS:
-				op_lbp = 10;
-				break;
+			case EToken::MINUS:
+				return 10;
 			case EToken::STAR:
-				op_lbp = 20;
-				break;
+			case EToken::SLASH:
+			case EToken::PERCENT:
+				return 11;
+			case EToken::NOT:
+			case EToken::TILDE:
+			case EToken::TILDE_ALIAS:
+				return 12;
 		}
 
-		return op_lbp;
+		return 0;
 	};
 
 		/*
@@ -1267,7 +1300,7 @@ namespace header_tool
 					}
 					skip_symbol();
 
-					Macro2 macro;
+					Macro macro;
 					macro.isVariadic = false;
 
 					// # define name(
@@ -1442,110 +1475,73 @@ namespace header_tool
 					uint64 end_index = 0;// find_end_of_expression(symbols, index);
 					end_index++;
 
+					
+					auto nud = [&symbols, &index](EToken t, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
+					{
+						switch (t)
+						{
+							case EToken::LPAREN:
+							{
+								index++;
+								int result = expr_ref(0, expr_ref, led_ref, nud_ref);
+								index++;
+								return result;
+
+							} break;
+							case EToken::NOT:
+								index++;
+								return !std::stoi(symbols[index].string());
+								break;
+							case EToken::INTEGER_LITERAL:
+								return std::stoi(symbols[index].string());
+								break;
+							default:
+								assert(false);
+								break;
+						}
+						return 4;
+					};
+
+					auto led = [](EToken op, int left, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
+					{
+						switch (op)
+						{
+							case EToken::PLUS:
+								return left + expr_ref(lbp(op), expr_ref, led_ref, nud_ref);
+								break;
+							case EToken::STAR:
+								return left * expr_ref(lbp(op), expr_ref, led_ref, nud_ref);
+								break;
+							default:
+								// new line
+								return left;
+								break;
+						}
+
+						return 0;
+					};
+
+					auto expr = [&symbols, &index](int rbp, auto& expr_impl, auto& led_ref, auto& nud_ref)->int
+					{
+						// 4 * 5 + 3
+						int left = nud_ref(symbols[index].token, expr_impl, led_ref, nud_ref); // 4.Nud()
+						index++;
+						while (rbp < lbp(symbols[index].token))
+						{
+							left = led_ref(symbols[index++].token, left, expr_impl, led_ref, nud_ref); // +.Led(4)
+						}
+						return left;
+					};
+
+					auto eval = [&symbols, &index, expr, led, nud]()
+					{
+						return expr(0, expr, led, nud);
+					};
+
 					skip_symbol();
 					skip_whitespaces();
 
-					temp_symbols = &symbols;
-					temp_index = &index;
-					expression(0);
-
-					auto evaluateCondition = [&](const std::vector<Symbol>& symbols, uint64& index)
-					{
-						std::vector<Symbol> expression_symbols;
-
-						while (index < symbols.size())
-						{
-							EToken token = symbols[index].token;
-
-							if (token == EToken::IDENTIFIER)
-							{
-								expand_macro(expression_symbols, symbols[index], symbols[index].line_num);
-							}
-							else if (token == EToken::PREPROC_DEFINED)
-							{
-								bool braces = false;
-
-								if (index < symbols.size() && symbols.at(index).token == EToken::LPAREN)
-								{
-									index++;
-									braces = true;
-								}
-
-								if (index < symbols.size() && symbols[index].token == EToken::IDENTIFIER)
-								{
-									index++;
-								}
-								else
-								{
-									error(g_include_file_stack.top(), symbols[index]);
-								}
-
-								Symbol if_defined_lookup = symbols[index];
-								if_defined_lookup.token = g_macros.find(if_defined_lookup.string()) != g_macros.end() ? EToken::MOC_TRUE : EToken::MOC_FALSE;
-								expression_symbols.push_back(if_defined_lookup);
-								if (braces)
-								{
-									if (index < symbols.size() && symbols[index].token == EToken::IDENTIFIER)
-									{
-										index++;
-									}
-								}
-							}
-							else if (token == EToken::NEWLINE)
-							{
-								expression_symbols.push_back(symbols[index]);
-								break;
-							}
-							else if (token == EToken::WHITESPACE)
-							{
-							}
-							else
-							{
-								expression_symbols.push_back(symbols[index]);
-							}
-
-							index++;
-						}
-
-						return evaluate_preprocessor_expression(expression_symbols);
-					};
-
-					while (!evaluateCondition(symbols, index))
-					{
-						uint64 skip_count = 1;
-
-						while (index < symbols.size() - 1 && skip_count)
-						{
-							switch (symbols[index++].token)
-							{
-								case EToken::PREPROC_IF:
-								case EToken::PREPROC_IFDEF:
-								case EToken::PREPROC_IFNDEF:
-									++index;
-									skip_count++;
-									break;
-								case EToken::PREPROC_ENDIF:
-								case EToken::PREPROC_ELIF:
-								case EToken::PREPROC_ELSE:
-									skip_count--;
-									break;
-							}
-							++index;
-						}
-
-						if (index >= symbols.size() - 1)
-							break;
-
-						if (index < symbols.size() && symbols[index].token == EToken::PREPROC_ELIF)
-						{
-							index++;
-						}
-						else
-						{
-							while (index < symbols.size() && symbols.at(index++).token != EToken::NEWLINE);
-							break;
-						}
-					}
+					int b = eval();
 					continue;
 				}
 				case EToken::PREPROC_ELIF:

@@ -1947,7 +1947,7 @@ namespace header_tool
 					if (parenCount == 0 && braceCount == 0)
 						--angleCount;
 					break;
-				case EToken::GTGT:
+				case EToken::RSHIFT:
 					if (parenCount == 0 && braceCount == 0)
 					{
 						angleCount -= 2;
