@@ -1478,7 +1478,7 @@ namespace header_tool
 					
 					auto nud = [&symbols, &index](EToken t, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
 					{
-						switch (t)
+						switch (t) 
 						{
 							case EToken::LPAREN:
 							{
@@ -1521,11 +1521,11 @@ namespace header_tool
 						return 0;
 					};
 
-					auto expr = [&symbols, &index](int rbp, auto& expr_impl, auto& led_ref, auto& nud_ref)->int
+					auto expr = [&symbols, &index, &skip_whitespaces](int rbp, auto& expr_impl, auto& led_ref, auto& nud_ref)->int
 					{
 						// 4 * 5 + 3
 						int left = nud_ref(symbols[index].token, expr_impl, led_ref, nud_ref); // 4.Nud()
-						index++;
+						skip_whitespaces(); 
 						while (rbp < lbp(symbols[index].token))
 						{
 							left = led_ref(symbols[index++].token, left, expr_impl, led_ref, nud_ref); // +.Led(4)

@@ -1,4 +1,11 @@
-#if (4+5)*3
+#if (4 + 5) * 3
+int a = 0;
+a++;
+int b = static_cast<int>(a);
+#elif (4 + 5) * 3
+int c = 0;
+c++;
+#endif
 #include "12.h"
 #define one 1
 #define two 2
