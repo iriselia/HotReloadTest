@@ -347,6 +347,9 @@ namespace header_tool
 				case EToken::PREPROC_DEFINED:
 				case EToken::PREPROC_UNDEF:
 				{
+					EToken token = next_token(TokenizeMode::PreprocKeyword, data);
+					assert(token == EToken::WHITESPACE);
+					push_symbol(token);
 					mode = TokenizeMode::PreprocExpression;
 				} break;
 				case EToken::PREPROC_DEFINE:
@@ -542,6 +545,12 @@ namespace header_tool
 			case EToken::WHITESPACE:
 			{
 				column--;
+				
+				if (mode == TokenizeMode::PreprocExpression)
+				{
+					continue;
+				}
+
 				push_symbol(token);
 				//while (*data && (*data == ' ' || *data == '\t'))
 				//	++data;

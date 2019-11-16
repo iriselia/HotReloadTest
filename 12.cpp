@@ -1,10 +1,8 @@
-#if (4 + 5) * 3
-int a = 0;
-a++;
-int b = static_cast<int>(a);
+#if !((4 + 5) * 3)
 #elif (4 + 5) * 3
 int c = 0;
-c++;
+#else
+int a = 0;
 #endif
 #include "12.h"
 #define one 1
@@ -13,6 +11,9 @@ c++;
 #define four 4
 #define wefwef (one + (two + 3))
 
+
+a++;
+int b = static_cast<int>(a);
 
 int iphone = wefwef + wefwef;
 //123

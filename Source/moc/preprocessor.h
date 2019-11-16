@@ -980,55 +980,6 @@ namespace header_tool
 	}
 	*/
 
-	int lbp(EToken token)
-	{
-		switch (token)
-		{
-			case EToken::QUESTION:
-				return 1;
-			case EToken::OROR:
-			case EToken::OROR_ALIAS:
-				return 2;
-			case EToken::ANDAND:
-			case EToken::ANDAND_ALIAS:
-				return 3;
-			case EToken::OR:
-			case EToken::OR_ALIAS:
-				return 4;
-			case EToken::XOR:
-			case EToken::XOR_ALIAS:
-				return 5;
-			case EToken::AND:
-			case EToken::AND_ALIAS:
-				return 6;
-			case EToken::EQEQ:
-			case EToken::NOTEQ:
-			case EToken::NOTEQ_ALIAS:
-				return 7;
-			case EToken::LANGLE:
-			case EToken::RANGLE:
-			case EToken::LESSEQ:
-			case EToken::GREATEREQ:
-				return 8;
-			case EToken::LSHIFT:
-			case EToken::RSHIFT:
-				return 9;
-			case EToken::PLUS:
-			case EToken::MINUS:
-				return 10;
-			case EToken::STAR:
-			case EToken::SLASH:
-			case EToken::PERCENT:
-				return 11;
-			case EToken::NOT:
-			case EToken::TILDE:
-			case EToken::TILDE_ALIAS:
-				return 12;
-		}
-
-		return 0;
-	};
-
 		/*
 	Expression(0)
 		4.Nud()
@@ -1064,7 +1015,7 @@ namespace header_tool
 	}
 	*/
 	
-
+	/*
 	const std::vector<Symbol>* temp_symbols;
 	uint64* temp_index;
 
@@ -1123,6 +1074,7 @@ namespace header_tool
 		}
 		return left;
 	};
+	*/
 
 	inline std::vector<Symbol> preprocess_internal(const std::string &filename, const std::string& input, const std::vector<Symbol>& symbols, bool preprocess_only)
 	{
@@ -1157,12 +1109,11 @@ namespace header_tool
 
 			auto skip_whitespaces = [&]()
 			{
-				while (symbols[index].token != EToken::WHITESPACE
-					&& symbols[index].token != EToken::WHITESPACE_ALIAS
+				while (
+					(symbols[index].token == EToken::WHITESPACE || symbols[index].token == EToken::WHITESPACE_ALIAS)
 					&& skip_symbol())
 				{
 				}
-				skip_symbol();
 			};
 
 			auto skip_line = [&]()
@@ -1174,7 +1125,120 @@ namespace header_tool
 				skip_symbol();
 			};
 
+			auto lbp = [](EToken token)
+			{
+				switch (token)
+				{
+					case EToken::QUESTION:
+						return 1;
+					case EToken::OROR:
+					case EToken::OROR_ALIAS:
+						return 2;
+					case EToken::ANDAND:
+					case EToken::ANDAND_ALIAS:
+						return 3;
+					case EToken::OR:
+					case EToken::OR_ALIAS:
+						return 4;
+					case EToken::XOR:
+					case EToken::XOR_ALIAS:
+						return 5;
+					case EToken::AND:
+					case EToken::AND_ALIAS:
+						return 6;
+					case EToken::EQEQ:
+					case EToken::NOTEQ:
+					case EToken::NOTEQ_ALIAS:
+						return 7;
+					case EToken::LANGLE:
+					case EToken::RANGLE:
+					case EToken::LESSEQ:
+					case EToken::GREATEREQ:
+						return 8;
+					case EToken::LSHIFT:
+					case EToken::RSHIFT:
+						return 9;
+					case EToken::PLUS:
+					case EToken::MINUS:
+						return 10;
+					case EToken::STAR:
+					case EToken::SLASH:
+					case EToken::PERCENT:
+						return 11;
+					case EToken::NOT:
+					case EToken::TILDE:
+					case EToken::TILDE_ALIAS:
+						return 12;
+				}
 
+				return 0;
+			};
+
+			auto nud = [&symbols, &index, &skip_whitespaces](EToken t, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
+			{
+				int result = ~0;
+
+				switch (t)
+				{
+					case EToken::LPAREN:
+					{
+						index++;
+						result = expr_ref(0, expr_ref, led_ref, nud_ref);
+					} break;
+					case EToken::NOT:
+					{
+						index++;
+						result = !expr_ref(0, expr_ref, led_ref, nud_ref);
+					} break;
+					case EToken::INTEGER_LITERAL:
+					{
+						result = std::stoi(symbols[index].string());
+					} break;
+					default:
+						assert(false);
+						break;
+				}
+
+				index++;
+				return ~0;
+			};
+
+			auto led = [&lbp](EToken op, int left, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
+			{
+				switch (op)
+				{
+					case EToken::PLUS:
+						return left + expr_ref(lbp(op), expr_ref, led_ref, nud_ref);
+						break;
+					case EToken::STAR:
+						return left * expr_ref(lbp(op), expr_ref, led_ref, nud_ref);
+						break;
+					default:
+						// new line
+						return left;
+						break;
+				}
+
+				return 0;
+			};
+
+			auto expr = [&symbols, &index, &lbp, &skip_whitespaces](int rbp, auto& expr_impl, auto& led_ref, auto& nud_ref)->int
+			{
+				// 4 * 5 + 3
+				int left = nud_ref(symbols[index].token, expr_impl, led_ref, nud_ref); // 4.Nud()
+				while (rbp < lbp(symbols[index].token))
+				{
+					left = led_ref(symbols[index++].token, left, expr_impl, led_ref, nud_ref); // +.Led(4)
+				}
+				return left;
+			};
+
+			auto eval = [&symbols, &index, expr, led, nud]()
+			{
+				return expr(0, expr, led, nud);
+			};
+
+			static int if_count = 0;
 
 			switch (token)
 			{
@@ -1320,45 +1384,45 @@ namespace header_tool
 
 							switch (token)
 							{
-							// # define name(arg,
-							case EToken::COMMA:
-							{
-								assert(arg_count == (comma_count + 1));
-								comma_count++;
-								skip_symbol();
-							} break;
-							// # define name(arg
-							case EToken::IDENTIFIER:
-							{
-								Symbol symbol = symbols[index];
-								if (std::find(arguments.begin(), arguments.end(), symbol) != arguments.end())
+								// # define name(arg,
+								case EToken::COMMA:
 								{
-									error(g_include_file_stack.top(), symbols[index].line_num, "Duplicate macro parameter.");
-								}
-								assert(comma_count == arg_count);
-								arguments.push_back(symbols[index]);
-								skip_symbol();
-							} break;
-							// # define name(arg...
-							case EToken::ELIPSIS:
-							{
-								macro.isVariadic = true;
-								arguments.emplace_back(symbols[index].line_num, EToken::IDENTIFIER, new std::string("__VA_ARGS__"));
-								skip_whitespaces();
-								// ... must be the last argument
-								if (symbols[index].token != EToken::RPAREN)
+									assert(arg_count == (comma_count + 1));
+									comma_count++;
+									skip_symbol();
+								} break;
+								// # define name(arg
+								case EToken::IDENTIFIER:
 								{
-									error(g_include_file_stack.top(), symbols[index].line_num, "missing ')' in macro argument list");
-								}
-							}break;
-							default:
-							{
-								assert(false);
-								if (!is_identifier(lexem.data(), lexem.length()))
+									Symbol symbol = symbols[index];
+									if (std::find(arguments.begin(), arguments.end(), symbol) != arguments.end())
+									{
+										error(g_include_file_stack.top(), symbols[index].line_num, "Duplicate macro parameter.");
+									}
+									assert(comma_count == arg_count);
+									arguments.push_back(symbols[index]);
+									skip_symbol();
+								} break;
+								// # define name(arg...
+								case EToken::ELIPSIS:
 								{
-									error(g_include_file_stack.top(), symbols[index].line_num, "Unexpected character in macro argument list.");
-								}
-							} break;
+									macro.isVariadic = true;
+									arguments.emplace_back(symbols[index].line_num, EToken::IDENTIFIER, new std::string("__VA_ARGS__"));
+									skip_whitespaces();
+									// ... must be the last argument
+									if (symbols[index].token != EToken::RPAREN)
+									{
+										error(g_include_file_stack.top(), symbols[index].line_num, "missing ')' in macro argument list");
+									}
+								}break;
+								default:
+								{
+									assert(false);
+									if (!is_identifier(lexem.data(), lexem.length()))
+									{
+										error(g_include_file_stack.top(), symbols[index].line_num, "Unexpected character in macro argument list.");
+									}
+								} break;
 							}
 							/*
 							if (symbols[index].lexem() == "...")
@@ -1386,7 +1450,7 @@ namespace header_tool
 					// # define name(...) expression
 					// # define name expression
 					uint64 rewind = index;
-					do 
+					do
 					{
 						skip_line();
 					} while (symbols[index - 2].token == EToken::BACKSLASH);
@@ -1401,30 +1465,30 @@ namespace header_tool
 						EToken token = symbols[index].token;
 						switch (token)
 						{
-						case EToken::PREPROC_HASH:
-						{
-							macro.symbols.push_back(symbols[index]);
-							skip_whitespaces();
-						} break;
-						case EToken::PREPROC_HASHHASH:
-						case EToken::BACKSLASH:
-						case EToken::NEWLINE:
-						{
-							while (!macro.symbols.empty()
-								&& (macro.symbols.back().token != EToken::WHITESPACE
-									|| macro.symbols.back().token != EToken::WHITESPACE_ALIAS))
+							case EToken::PREPROC_HASH:
 							{
-								macro.symbols.pop_back();
-							}
-							macro.symbols.push_back(symbols[index]);
-							if (token == EToken::PREPROC_HASHHASH)
-							{
+								macro.symbols.push_back(symbols[index]);
 								skip_whitespaces();
-							}
-						} break;
-						default:
-							macro.symbols.push_back(symbols[index]);
-							break;
+							} break;
+							case EToken::PREPROC_HASHHASH:
+							case EToken::BACKSLASH:
+							case EToken::NEWLINE:
+							{
+								while (!macro.symbols.empty()
+									&& (macro.symbols.back().token != EToken::WHITESPACE
+										|| macro.symbols.back().token != EToken::WHITESPACE_ALIAS))
+								{
+									macro.symbols.pop_back();
+								}
+								macro.symbols.push_back(symbols[index]);
+								if (token == EToken::PREPROC_HASHHASH)
+								{
+									skip_whitespaces();
+								}
+							} break;
+							default:
+								macro.symbols.push_back(symbols[index]);
+								break;
 						}
 
 						skip_symbol();
@@ -1467,84 +1531,84 @@ namespace header_tool
 					index++;
 					continue;
 				} break;
+				case EToken::PREPROC_IF:
 				case EToken::PREPROC_IFDEF:
 				case EToken::PREPROC_IFNDEF:
-				case EToken::PREPROC_IF:
 				{
-					// fix this crap
-					uint64 end_index = 0;// find_end_of_expression(symbols, index);
-					end_index++;
-
-					
-					auto nud = [&symbols, &index](EToken t, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
-					{
-						switch (t) 
-						{
-							case EToken::LPAREN:
-							{
-								index++;
-								int result = expr_ref(0, expr_ref, led_ref, nud_ref);
-								index++;
-								return result;
-
-							} break;
-							case EToken::NOT:
-								index++;
-								return !std::stoi(symbols[index].string());
-								break;
-							case EToken::INTEGER_LITERAL:
-								return std::stoi(symbols[index].string());
-								break;
-							default:
-								assert(false);
-								break;
-						}
-						return 4;
-					};
-
-					auto led = [](EToken op, int left, auto& expr_ref, auto& led_ref, auto& nud_ref)->int
-					{
-						switch (op)
-						{
-							case EToken::PLUS:
-								return left + expr_ref(lbp(op), expr_ref, led_ref, nud_ref);
-								break;
-							case EToken::STAR:
-								return left * expr_ref(lbp(op), expr_ref, led_ref, nud_ref);
-								break;
-							default:
-								// new line
-								return left;
-								break;
-						}
-
-						return 0;
-					};
-
-					auto expr = [&symbols, &index, &skip_whitespaces](int rbp, auto& expr_impl, auto& led_ref, auto& nud_ref)->int
-					{
-						// 4 * 5 + 3
-						int left = nud_ref(symbols[index].token, expr_impl, led_ref, nud_ref); // 4.Nud()
-						skip_whitespaces(); 
-						while (rbp < lbp(symbols[index].token))
-						{
-							left = led_ref(symbols[index++].token, left, expr_impl, led_ref, nud_ref); // +.Led(4)
-						}
-						return left;
-					};
-
-					auto eval = [&symbols, &index, expr, led, nud]()
-					{
-						return expr(0, expr, led, nud);
-					};
-
-					skip_symbol();
-					skip_whitespaces();
-
-					int b = eval();
-					continue;
+					if_count++;
 				}
 				case EToken::PREPROC_ELIF:
+				{
+					assert(if_count > 0);
+					{
+						skip_symbol();
+
+						/*
+						while (hasNext()) {
+							Token token = next();
+							if (token == PP_IDENTIFIER) {
+								macroExpand(&substituted, this, symbols, index, symbol().lineNum, true);
+							}
+							else if (token == PP_DEFINED) {
+								bool braces = test(PP_LPAREN);
+								next(PP_IDENTIFIER);
+								Symbol definedOrNotDefined = symbol();
+								definedOrNotDefined.token = macros.contains(definedOrNotDefined) ? PP_MOC_TRUE : PP_MOC_FALSE;
+								substituted += definedOrNotDefined;
+								if (braces)
+									test(PP_RPAREN);
+								continue;
+							}
+							else if (token == PP_NEWLINE) {
+								substituted += symbol();
+								break;
+							}
+							else {
+								substituted += symbol();
+							}
+						}
+						*/
+
+						int condition = eval();
+
+						auto skip_branch = [&symbols, &index](auto& skip_branch_ref)->uint64
+						{
+							while ((index < symbols.size() - 1)
+								&& symbols[index].token != EToken::PREPROC_ENDIF
+								&& symbols[index].token != EToken::PREPROC_ELIF
+								&& symbols[index].token != EToken::PREPROC_ELSE)
+							{
+								switch (symbols[index].token)
+								{
+									case EToken::PREPROC_IF:
+									case EToken::PREPROC_IFDEF:
+									case EToken::PREPROC_IFNDEF:
+									{
+										if_count++;
+										skip_branch_ref(skip_branch_ref);
+									} break;
+								}
+								index++;
+							}
+							return (index < symbols.size() - 1);
+						};
+
+						while (true)
+						{
+							if (condition)
+							{
+								break;
+							}
+							else
+							{
+								skip_branch(skip_branch);
+								break;
+							}
+						}
+
+						continue;
+					}
+				}
 				case EToken::PREPROC_ELSE:
 				{
 					uint64 skip_count = 1;
@@ -1567,6 +1631,7 @@ namespace header_tool
 					[[fallthrough]];
 				}
 				case EToken::PREPROC_ENDIF:
+					if_count--;
 					skip_line();
 					continue;
 				case EToken::PREPROC_HASH:
